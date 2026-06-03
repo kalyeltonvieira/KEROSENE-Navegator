@@ -9,6 +9,9 @@
 
 typedef struct KTab {
     KPage page;
+    int webview_id;
+    float scroll_y;
+    char home_query[256];
     char history[32][K_MAX_URL];
     int history_count;
     int history_index;
@@ -23,12 +26,11 @@ typedef struct KApp {
     int active;
     int width;
     int height;
-    float scroll_y;
     int omnibox_focus;
     int omnibox_select_all;
     int home_search_focus;
-    char home_query[256];
     int menu_open;
+    int prefer_webview;
     int dark_mode;
     int theme_animating;
     float theme_t;
@@ -114,9 +116,59 @@ static float chrome_h(KApp *app) {
     return (float)(app->theme.tab_h + app->theme.toolbar_h);
 }
 
+static KTab *current_tab(KApp *app) {
+    if (!app || app->active < 0 || app->active >= app->tab_count) return NULL;
+    return &app->tabs[app->active];
+}
+
 static KPage *current_page(KApp *app) {
-    if (app->active < 0 || app->active >= app->tab_count) return NULL;
-    return &app->tabs[app->active].page;
+    KTab *tab = current_tab(app);
+    return tab ? &tab->page : NULL;
+}
+
+static float current_scroll(KApp *app) {
+    KTab *tab = current_tab(app);
+    return tab ? tab->scroll_y : 0.0f;
+}
+
+static void set_current_scroll(KApp *app, float value) {
+    KTab *tab = current_tab(app);
+    if (tab) tab->scroll_y = value;
+}
+
+static char *current_home_query(KApp *app) {
+    KTab *tab = current_tab(app);
+    return tab ? tab->home_query : NULL;
+}
+
+static int current_webview_id(KApp *app) {
+    KTab *tab = current_tab(app);
+    return tab ? tab->webview_id : -1;
+}
+
+static KRect settings_panel_rect(KApp *app);
+
+static void webview_content_bounds(KApp *app, int *x, int *y, int *w, int *h) {
+    int top = (int)chrome_h(app);
+    int width = app->width;
+    int height = app->height - top;
+    if (height < 1) height = 1;
+
+    KPage *page = current_page(app);
+    if (app->menu_open && page && page->compat_mode) {
+        KRect panel = settings_panel_rect(app);
+        int side_w = (int)(panel.x - 8.0f);
+        if (side_w >= 280) {
+            width = side_w;
+        } else {
+            width = side_w > 1 ? side_w : 1;
+        }
+    }
+
+    *x = 0;
+    *y = top;
+    *w = width > 1 ? width : 1;
+    *h = height;
 }
 
 static int is_home_page(const KPage *page) {
@@ -128,8 +180,12 @@ static int is_search_page(const KPage *page) {
 }
 
 static void sync_webview_visibility(KApp *app) {
-    KPage *page = current_page(app);
-    webview_host_show(page && page->compat_mode && !app->menu_open);
+    KTab *tab = current_tab(app);
+    KPage *page = tab ? &tab->page : NULL;
+    int x, y, w, h;
+    webview_content_bounds(app, &x, &y, &w, &h);
+    webview_host_resize(x, y, w, h);
+    webview_host_activate((tab && page && page->compat_mode) ? tab->webview_id : -1);
 }
 
 static void close_menu(KApp *app) {
@@ -185,16 +241,17 @@ static void page_init(KPage *page) {
 }
 
 static void clamp_scroll(KApp *app) {
-    KPage *page = current_page(app);
+    KTab *tab = current_tab(app);
+    KPage *page = tab ? &tab->page : NULL;
     if (!page) {
-        app->scroll_y = 0.0f;
+        if (tab) tab->scroll_y = 0.0f;
         return;
     }
     float viewport = (float)app->height - chrome_h(app);
     float max_scroll = page->render.content_height - viewport;
     if (max_scroll < 0.0f) max_scroll = 0.0f;
-    if (app->scroll_y < 0.0f) app->scroll_y = 0.0f;
-    if (app->scroll_y > max_scroll) app->scroll_y = max_scroll;
+    if (tab->scroll_y < 0.0f) tab->scroll_y = 0.0f;
+    if (tab->scroll_y > max_scroll) tab->scroll_y = max_scroll;
 }
 
 static void layout_active(KApp *app) {
@@ -300,12 +357,12 @@ static void app_load_url_with_history(KApp *app, const char *input, int add_hist
     strncpy(app->omnibox, url, sizeof(app->omnibox) - 1);
     app->omnibox[sizeof(app->omnibox) - 1] = 0;
     app->omnibox_select_all = 0;
-    app->scroll_y = 0.0f;
+    tab->scroll_y = 0.0f;
     set_status(page, "Carregando");
 
     if (!_stricmp(url, "kerosene:home")) {
         page->compat_mode = 0;
-        app->home_query[0] = 0;
+        tab->home_query[0] = 0;
         sync_webview_visibility(app);
         apply_document_pipeline(app, page, url, HOME_HTML);
         set_status(page, app->renderer_status);
@@ -348,27 +405,31 @@ static void app_load_url_with_history(KApp *app, const char *input, int add_hist
         return;
     }
 
-    page->compat_mode = 1;
-    cyclone_free_dom(page->document);
-    page->document = NULL;
-    kfree(page->html);
-    page->html = kstrdup("");
-    kfree(page->reader_text);
-    page->reader_text = NULL;
-    render_list_reset(&page->render);
-    memset(page->search_results, 0, sizeof(page->search_results));
-    page->search_count = 0;
-    page->search_query[0] = 0;
-    strncpy(page->url, url, sizeof(page->url) - 1);
-    page->url[sizeof(page->url) - 1] = 0;
-    strncpy(page->title, url, sizeof(page->title) - 1);
-    page->title[sizeof(page->title) - 1] = 0;
-    snprintf(page->status, sizeof(page->status), "Modo compatibilidade WebView2");
-    webview_host_resize(0, (int)chrome_h(app), app->width, app->height - (int)chrome_h(app));
+    if (app->prefer_webview) {
+        page->compat_mode = 1;
+        cyclone_free_dom(page->document);
+        page->document = NULL;
+        kfree(page->html);
+        page->html = kstrdup("");
+        kfree(page->reader_text);
+        page->reader_text = NULL;
+        render_list_reset(&page->render);
+        memset(page->search_results, 0, sizeof(page->search_results));
+        page->search_count = 0;
+        page->search_query[0] = 0;
+        strncpy(page->url, url, sizeof(page->url) - 1);
+        page->url[sizeof(page->url) - 1] = 0;
+        strncpy(page->title, url, sizeof(page->title) - 1);
+        page->title[sizeof(page->title) - 1] = 0;
+        snprintf(page->status, sizeof(page->status), "Modo compatibilidade WebView2");
+        sync_webview_visibility(app);
+        webview_host_navigate(tab->webview_id, url);
+        InvalidateRect(app->hwnd, NULL, FALSE);
+        return;
+    }
+
+    page->compat_mode = 0;
     sync_webview_visibility(app);
-    webview_host_navigate(url);
-    InvalidateRect(app->hwnd, NULL, FALSE);
-    return;
 
     KHttpResponse response;
     char err[256] = {0};
@@ -401,36 +462,62 @@ static void app_go_history(KApp *app, int delta) {
 static void app_new_tab(KApp *app, const char *url) {
     if (app->tab_count >= K_MAX_TABS) return;
     int idx = app->tab_count++;
+    memset(&app->tabs[idx], 0, sizeof(app->tabs[idx]));
     page_init(&app->tabs[idx].page);
+    app->tabs[idx].webview_id = webview_host_create_tab();
     app->tabs[idx].history_count = 0;
     app->tabs[idx].history_index = -1;
     app->active = idx;
-    app->scroll_y = 0.0f;
     app_load_url(app, url ? url : "kerosene:home");
 }
 
 static void app_close_tab(KApp *app, int idx) {
     if (app->tab_count <= 1 || idx < 0 || idx >= app->tab_count) return;
+    webview_host_close_tab(app->tabs[idx].webview_id);
     page_clear(&app->tabs[idx].page);
     for (int i = idx; i < app->tab_count - 1; i++) {
         app->tabs[i] = app->tabs[i + 1];
     }
     memset(&app->tabs[app->tab_count - 1], 0, sizeof(app->tabs[app->tab_count - 1]));
     app->tab_count--;
-    if (app->active >= app->tab_count) app->active = app->tab_count - 1;
-    app->scroll_y = 0.0f;
+    if (app->active > idx) {
+        app->active--;
+    } else if (app->active >= app->tab_count) {
+        app->active = app->tab_count - 1;
+    }
     KPage *page = current_page(app);
     if (page) strncpy(app->omnibox, page->url, sizeof(app->omnibox) - 1);
     app->omnibox[sizeof(app->omnibox) - 1] = 0;
     app->omnibox_select_all = 0;
-    if (page && page->compat_mode) {
-        webview_host_resize(0, (int)chrome_h(app), app->width, app->height - (int)chrome_h(app));
-        webview_host_show(1);
-        webview_host_navigate(page->url);
-    } else {
-        webview_host_show(0);
-    }
+    sync_webview_visibility(app);
     InvalidateRect(app->hwnd, NULL, FALSE);
+}
+
+static void app_reload_active_tab(KApp *app) {
+    KPage *page = current_page(app);
+    if (!page) return;
+    if (page->compat_mode) {
+        webview_host_reload(current_webview_id(app));
+    } else {
+        app_load_url_with_history(app, page->url, 0);
+    }
+}
+
+static void app_toggle_site_engine(KApp *app) {
+    KPage *page = current_page(app);
+    char url[K_MAX_URL] = {0};
+    int reload = page && page->url[0] && strstr(page->url, "://");
+    if (reload) {
+        strncpy(url, page->url, sizeof(url) - 1);
+    }
+
+    app->prefer_webview = !app->prefer_webview;
+    if (reload) {
+        app_load_url_with_history(app, url, 0);
+    } else {
+        sync_webview_visibility(app);
+        InvalidateRect(app->hwnd, NULL, FALSE);
+    }
 }
 
 static void resolve_url(const char *base, const char *href, char *out, size_t cap) {
@@ -590,21 +677,65 @@ static KRect menu_button_rect(KApp *app) {
 }
 
 static KRect settings_panel_rect(KApp *app) {
-    float w = 292.0f;
-    float h = 238.0f;
-    float x = (float)app->width - w - 12.0f;
+    float top = chrome_h(app);
+    float w = 320.0f;
+    if (app->width < 760) w = (float)app->width - 16.0f;
+    if (w < 280.0f) w = fmaxf(220.0f, (float)app->width - 16.0f);
+    float x = (float)app->width - w;
     if (x < 8.0f) x = 8.0f;
-    return (KRect){ x, chrome_h(app) + 8.0f, w, h };
+    return (KRect){ x, top, w, fmaxf(260.0f, (float)app->height - top) };
+}
+
+static KRect settings_row(KApp *app, int idx) {
+    KRect p = settings_panel_rect(app);
+    return (KRect){ p.x + 14.0f, p.y + 56.0f + (float)idx * 48.0f, p.w - 28.0f, 42.0f };
 }
 
 static KRect settings_theme_row(KApp *app) {
-    KRect p = settings_panel_rect(app);
-    return (KRect){ p.x + 12.0f, p.y + 52.0f, p.w - 24.0f, 42.0f };
+    return settings_row(app, 0);
+}
+
+static KRect settings_engine_row(KApp *app) {
+    return settings_row(app, 1);
 }
 
 static KRect settings_new_tab_row(KApp *app) {
-    KRect p = settings_panel_rect(app);
-    return (KRect){ p.x + 12.0f, p.y + 100.0f, p.w - 24.0f, 38.0f };
+    return settings_row(app, 2);
+}
+
+static KRect settings_reload_row(KApp *app) {
+    return settings_row(app, 3);
+}
+
+static KRect settings_reader_row(KApp *app) {
+    return settings_row(app, 4);
+}
+
+static KRect settings_external_row(KApp *app) {
+    return settings_row(app, 5);
+}
+
+static void draw_settings_switch(KApp *app, KRect row, int on, int enabled) {
+    KRect r = { row.x + row.w - 58.0f, row.y + 7.0f, 48.0f, 28.0f };
+    KColor track = enabled
+        ? (on ? theme_color(app, app->theme.accent) : theme_pair(app, 0xFFE7EAEE, 0xFF202124))
+        : theme_pair(app, 0xFFD8DDE5, 0xFF24262C);
+    KColor border = theme_pair(app, 0xFFD0D5DD, 0xFF3A3D45);
+    KColor knob = enabled ? theme_pair(app, 0xFFFFFFFF, 0xFFF1F3F4) : theme_pair(app, 0xFFF2F4F7, 0xFF707783);
+    renderer_fill_rect(app->renderer, r, track, 14.0f);
+    renderer_draw_border(app->renderer, r, border, 1.0f, 14.0f);
+    float knob_x = r.x + 3.0f + (on ? r.w - 26.0f : 0.0f);
+    renderer_fill_rect(app->renderer, (KRect){knob_x, r.y + 3.0f, 22.0f, 22.0f}, knob, 11.0f);
+}
+
+static void draw_settings_row(KApp *app, KRect row, const char *label, const char *value, int enabled) {
+    KColor text = enabled ? theme_color(app, app->theme.text) : theme_pair(app, 0x995F6368, 0x667A808A);
+    KColor muted = enabled ? theme_color(app, app->theme.muted) : theme_pair(app, 0x885F6368, 0x557A808A);
+    renderer_fill_rect(app->renderer, row, theme_pair(app, 0xFFF6F8FB, 0xFF15171B), 8.0f);
+    renderer_draw_text(app->renderer, (KRect){row.x + 12.0f, row.y + 7.0f, row.w - 88.0f, 18.0f}, text, label, 13.0f, 600, 0);
+    if (value && value[0]) {
+        renderer_draw_text(app->renderer, (KRect){row.x + 12.0f, row.y + 24.0f, row.w - 88.0f, 16.0f}, muted, value, 11.0f, 400, 0);
+    }
 }
 
 static void draw_settings_panel(KApp *app) {
@@ -613,30 +744,33 @@ static void draw_settings_panel(KApp *app) {
     KColor surface = theme_color(app, app->theme.surface);
     KColor text = theme_color(app, app->theme.text);
     KColor muted = theme_color(app, app->theme.muted);
-    renderer_fill_rect(app->renderer, (KRect){p.x + 2.0f, p.y + 3.0f, p.w, p.h}, theme_pair(app, 0x22000000, 0xDD000000), 10.0f);
-    renderer_fill_rect(app->renderer, p, surface, 10.0f);
-    renderer_draw_border(app->renderer, p, theme_pair(app, 0xFFE1E5EA, 0xFF2C3038), 1.0f, 10.0f);
-    renderer_draw_text(app->renderer, (KRect){p.x + 16.0f, p.y + 15.0f, p.w - 32.0f, 24.0f}, text, "Configuracoes", 18.0f, 700, 0);
+    renderer_fill_rect(app->renderer, (KRect){p.x - 3.0f, p.y, 3.0f, p.h}, theme_pair(app, 0x18000000, 0xAA000000), 0);
+    renderer_fill_rect(app->renderer, p, surface, 0);
+    renderer_draw_border(app->renderer, (KRect){p.x, p.y, 1.0f, p.h}, theme_pair(app, 0xFFE1E5EA, 0xFF2C3038), 1.0f, 0);
+    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + 17.0f, p.w - 36.0f, 24.0f}, text, "Configuracoes", 18.0f, 700, 0);
 
     KRect theme_row = settings_theme_row(app);
-    renderer_fill_rect(app->renderer, theme_row, theme_pair(app, 0xFFF6F8FB, 0xFF15171B), 8.0f);
-    renderer_draw_text(app->renderer, (KRect){theme_row.x + 12.0f, theme_row.y + 12.0f, 170.0f, 18.0f}, text, "Tema", 13.0f, 600, 0);
-    renderer_draw_text(app->renderer, (KRect){theme_row.x + 72.0f, theme_row.y + 12.0f, 90.0f, 18.0f}, muted, app->dark_mode ? "Preto" : "Claro", 13.0f, 400, 0);
-    KRect old = theme_toggle_rect(app);
-    KRect mini = { theme_row.x + theme_row.w - 60.0f, theme_row.y + 7.0f, 48.0f, 28.0f };
-    renderer_fill_rect(app->renderer, mini, theme_pair(app, 0xFFE7EAEE, 0xFF202124), 14.0f);
-    renderer_draw_border(app->renderer, mini, theme_pair(app, 0xFFD0D5DD, 0xFF3A3D45), 1.0f, 14.0f);
-    float knob_x = mini.x + 3.0f + (mini.w - 26.0f) * app->theme_t;
-    renderer_fill_rect(app->renderer, (KRect){knob_x, mini.y + 3.0f, 22.0f, 22.0f}, theme_pair(app, 0xFFFFC947, 0xFFF1F3F4), 11.0f);
-    (void)old;
+    draw_settings_row(app, theme_row, "Tema", app->dark_mode ? "Preto" : "Claro", 1);
+    draw_settings_switch(app, theme_row, app->dark_mode, 1);
 
-    KRect new_tab = settings_new_tab_row(app);
-    renderer_fill_rect(app->renderer, new_tab, theme_pair(app, 0x00FFFFFF, 0x0015171B), 8.0f);
-    renderer_draw_text(app->renderer, (KRect){new_tab.x + 12.0f, new_tab.y + 10.0f, new_tab.w - 24.0f, 18.0f}, text, "Nova guia", 13.0f, 600, 0);
+    KRect engine_row = settings_engine_row(app);
+    draw_settings_row(app, engine_row, "Motor de sites", app->prefer_webview ? "WebView2 compatibilidade" : "Renderizador nativo", 1);
+    draw_settings_switch(app, engine_row, app->prefer_webview, 1);
 
-    renderer_draw_text(app->renderer, (KRect){p.x + 24.0f, p.y + 154.0f, p.w - 48.0f, 18.0f}, muted, "Busca: Bing + Wiby", 12.0f, 400, 0);
-    renderer_draw_text(app->renderer, (KRect){p.x + 24.0f, p.y + 176.0f, p.w - 48.0f, 18.0f}, muted, "Sites: WebView2", 12.0f, 400, 0);
-    renderer_draw_text(app->renderer, (KRect){p.x + 24.0f, p.y + 198.0f, p.w - 48.0f, 18.0f}, muted, "Kerosene 0.1", 12.0f, 400, 0);
+    draw_settings_row(app, settings_new_tab_row(app), "Nova guia", "Abrir uma aba limpa", 1);
+    draw_settings_row(app, settings_reload_row(app), "Recarregar aba", "Atualizar a pagina atual", 1);
+
+    KPage *page = current_page(app);
+    int reader_enabled = page && page->document && !page->compat_mode && !is_home_page(page) && !is_search_page(page);
+    draw_settings_row(app, settings_reader_row(app), "Modo leitura", reader_enabled ? (page->reader_mode ? "Ligado nesta aba" : "Desligado nesta aba") : "Indisponivel nesta pagina", reader_enabled);
+    draw_settings_switch(app, settings_reader_row(app), page && page->reader_mode, reader_enabled);
+
+    int external_enabled = page && page->url[0] && strstr(page->url, "://");
+    draw_settings_row(app, settings_external_row(app), "Abrir no navegador", external_enabled ? page->url : "Indisponivel para paginas internas", external_enabled);
+
+    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 64.0f, p.w - 36.0f, 18.0f}, muted, "Busca: Bing com fallback Wiby", 12.0f, 400, 0);
+    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 42.0f, p.w - 36.0f, 18.0f}, muted, "Abas: estado preservado", 12.0f, 400, 0);
+    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 20.0f, p.w - 36.0f, 18.0f}, muted, "Kerosene 0.1", 12.0f, 400, 0);
 }
 
 static void draw_search_icon(KApp *app, float x, float y, KColor color) {
@@ -683,7 +817,7 @@ static KRect search_box_rect(KApp *app) {
     float top = chrome_h(app);
     float w = fminf(820.0f, (float)app->width - 64.0f);
     if (w < 300.0f) w = (float)app->width - 32.0f;
-    return (KRect){ ((float)app->width - w) * 0.5f, top + 28.0f - app->scroll_y, w, 44.0f };
+    return (KRect){ ((float)app->width - w) * 0.5f, top + 28.0f - current_scroll(app), w, 44.0f };
 }
 
 static KRect search_result_rect(KApp *app, int idx) {
@@ -711,11 +845,13 @@ static void draw_native_home(KApp *app) {
     if (app->home_search_focus) {
         renderer_draw_border(app->renderer, search, theme_color(app, app->theme.accent), 1.6f, 24.0f);
     }
-    const char *home_text = app->home_query[0] ? app->home_query : "Pesquise no Wiby ou digite uma URL";
+    const char *home_query = current_home_query(app);
+    if (!home_query) home_query = "";
+    const char *home_text = home_query[0] ? home_query : "Pesquise no Wiby ou digite uma URL";
     renderer_draw_text(app->renderer, (KRect){search.x + 54.0f, search.y + 14.0f, search.w - 74.0f, 22.0f},
-        app->home_query[0] ? text : muted, home_text, 15.0f, 400, 0);
+        home_query[0] ? text : muted, home_text, 15.0f, 400, 0);
     if (app->home_search_focus) {
-        float cx = search.x + 56.0f + fminf((float)strlen(app->home_query) * 8.0f, search.w - 74.0f);
+        float cx = search.x + 56.0f + fminf((float)strlen(home_query) * 8.0f, search.w - 74.0f);
         renderer_fill_rect(app->renderer, (KRect){cx, search.y + 14.0f, 1.0f, 21.0f}, theme_color(app, app->theme.accent), 0);
     }
 
@@ -738,6 +874,7 @@ static void draw_native_search(KApp *app, KPage *page) {
     KColor text = theme_color(app, app->theme.text);
     KColor muted = theme_color(app, app->theme.muted);
     KColor accent = theme_color(app, app->theme.accent);
+    float scroll = current_scroll(app);
     renderer_fill_rect(app->renderer, (KRect){0, top, (float)app->width, viewport_h}, theme_color(app, app->theme.page_bg), 0);
 
     KRect search = search_box_rect(app);
@@ -759,13 +896,13 @@ static void draw_native_search(KApp *app, KPage *page) {
     } else {
         snprintf(meta, sizeof(meta), "Nenhum resultado - %s", page->search_provider[0] ? page->search_provider : "busca");
     }
-    float meta_y = top + 82.0f - app->scroll_y;
+    float meta_y = top + 82.0f - scroll;
     if (meta_y >= top - 24.0f && meta_y <= (float)app->height) {
         renderer_draw_text(app->renderer, (KRect){search.x + 4.0f, meta_y, search.w - 8.0f, 20.0f}, muted, meta, 12.0f, 400, 0);
     }
 
     if (page->search_count <= 0) {
-        float y = top + 134.0f - app->scroll_y;
+        float y = top + 134.0f - scroll;
         renderer_draw_text(app->renderer, (KRect){search.x, y, search.w, 30.0f}, text, "Nenhum resultado encontrado", 22.0f, 600, 0);
         renderer_draw_text(app->renderer, (KRect){search.x, y + 42.0f, search.w, 40.0f}, muted, page->status, 14.0f, 400, 0);
         return;
@@ -774,7 +911,7 @@ static void draw_native_search(KApp *app, KPage *page) {
     for (int i = 0; i < page->search_count; i++) {
         KRect card = search_result_rect(app, i);
         KRect draw = card;
-        draw.y = top + card.y - app->scroll_y;
+        draw.y = top + card.y - scroll;
         if (draw.y + draw.h < top || draw.y > (float)app->height) continue;
         KSearchResult *r = &page->search_results[i];
         renderer_fill_rect(app->renderer, (KRect){draw.x + 1.0f, draw.y + 2.0f, draw.w, draw.h}, theme_pair(app, 0x12000000, 0x99000000), 8.0f);
@@ -822,8 +959,8 @@ static void draw_ui(KApp *app) {
     float y = tab_h + 10.0f;
     KTab *tab = app->active >= 0 ? &app->tabs[app->active] : NULL;
     KPage *active_page = current_page(app);
-    int can_back = (active_page && active_page->compat_mode) ? webview_host_can_go_back() : (tab && tab->history_index > 0);
-    int can_forward = (active_page && active_page->compat_mode) ? webview_host_can_go_forward() : (tab && tab->history_index + 1 < tab->history_count);
+    int can_back = (active_page && active_page->compat_mode && tab) ? webview_host_can_go_back(tab->webview_id) : (tab && tab->history_index > 0);
+    int can_forward = (active_page && active_page->compat_mode && tab) ? webview_host_can_go_forward(tab->webview_id) : (tab && tab->history_index + 1 < tab->history_count);
     draw_icon_button(app, 10.0f, y, 34.0f, 31.0f, ICON_BACK, can_back);
     draw_icon_button(app, 50.0f, y, 34.0f, 31.0f, ICON_FORWARD, can_forward);
     draw_icon_button(app, 90.0f, y, 34.0f, 31.0f, ICON_RELOAD, 1);
@@ -879,7 +1016,8 @@ static void draw_page(KApp *app) {
         return;
     }
     renderer_fill_rect(app->renderer, (KRect){0, top, (float)app->width, viewport_h}, theme_color(app, app->theme.page_bg), 0);
-    float yoff = top - app->scroll_y;
+    float scroll = current_scroll(app);
+    float yoff = top - scroll;
     for (size_t i = 0; i < page->render.count; i++) {
         KRenderCommand *cmd = &page->render.items[i];
         KRect r = compositor_offset_rect(cmd->rect, 0.0f, yoff);
@@ -899,7 +1037,7 @@ static void draw_page(KApp *app) {
         float track_h = viewport_h - 12.0f;
         float thumb_h = fmaxf(34.0f, track_h * viewport_h / page->render.content_height);
         float max_scroll = page->render.content_height - viewport_h;
-        float thumb_y = top + 6.0f + (track_h - thumb_h) * (max_scroll > 0.0f ? app->scroll_y / max_scroll : 0.0f);
+        float thumb_y = top + 6.0f + (track_h - thumb_h) * (max_scroll > 0.0f ? scroll / max_scroll : 0.0f);
         renderer_fill_rect(app->renderer, (KRect){(float)app->width - 8.0f, thumb_y, 4.0f, thumb_h}, kcolor_rgba(0.50f, 0.55f, 0.62f, 0.65f), 2.0f);
     }
 
@@ -917,6 +1055,8 @@ static void paint(KApp *app) {
     renderer_end(app->renderer);
 }
 
+static void toggle_reader(KApp *app);
+
 static void handle_click(KApp *app, int x, int y) {
     float tab_h = (float)app->theme.tab_h;
     float toolbar_top = tab_h;
@@ -933,9 +1073,37 @@ static void handle_click(KApp *app, int x, int y) {
             InvalidateRect(app->hwnd, NULL, FALSE);
             return;
         }
+        if (point_in(settings_engine_row(app), (float)x, (float)y)) {
+            app_toggle_site_engine(app);
+            return;
+        }
         if (point_in(settings_new_tab_row(app), (float)x, (float)y)) {
             close_menu(app);
             app_new_tab(app, "kerosene:home");
+            return;
+        }
+        if (point_in(settings_reload_row(app), (float)x, (float)y)) {
+            close_menu(app);
+            app_reload_active_tab(app);
+            return;
+        }
+        if (point_in(settings_reader_row(app), (float)x, (float)y)) {
+            KPage *page = current_page(app);
+            if (page && page->document && !page->compat_mode && !is_home_page(page) && !is_search_page(page)) {
+                close_menu(app);
+                toggle_reader(app);
+            }
+            return;
+        }
+        if (point_in(settings_external_row(app), (float)x, (float)y)) {
+            KPage *page = current_page(app);
+            if (page && page->url[0] && strstr(page->url, "://")) {
+                char url[K_MAX_URL];
+                strncpy(url, page->url, sizeof(url) - 1);
+                url[sizeof(url) - 1] = 0;
+                close_menu(app);
+                platform_open_external(url);
+            }
             return;
         }
         if (point_in(settings_panel_rect(app), (float)x, (float)y)) {
@@ -953,17 +1121,10 @@ static void handle_click(KApp *app, int x, int y) {
                     app_close_tab(app, i);
                 } else {
                     app->active = i;
-                    app->scroll_y = 0.0f;
                     KPage *page = current_page(app);
                     if (page) strncpy(app->omnibox, page->url, sizeof(app->omnibox) - 1);
                     app->omnibox[sizeof(app->omnibox) - 1] = 0;
-                    if (page && page->compat_mode) {
-                        webview_host_resize(0, (int)chrome_h(app), app->width, app->height - (int)chrome_h(app));
-                        webview_host_show(1);
-                        webview_host_navigate(page->url);
-                    } else {
-                        webview_host_show(0);
-                    }
+                    sync_webview_visibility(app);
                     layout_active(app);
                     InvalidateRect(app->hwnd, NULL, FALSE);
                 }
@@ -981,20 +1142,20 @@ static void handle_click(KApp *app, int x, int y) {
     if (y >= by && y <= by + 34.0f) {
         if (x >= 10 && x <= 44) {
             KPage *page = current_page(app);
-            if (page && page->compat_mode && webview_host_can_go_back()) webview_host_go_back();
+            int webview_id = current_webview_id(app);
+            if (page && page->compat_mode && webview_host_can_go_back(webview_id)) webview_host_go_back(webview_id);
             else app_go_history(app, -1);
             return;
         }
         if (x >= 50 && x <= 84) {
             KPage *page = current_page(app);
-            if (page && page->compat_mode && webview_host_can_go_forward()) webview_host_go_forward();
+            int webview_id = current_webview_id(app);
+            if (page && page->compat_mode && webview_host_can_go_forward(webview_id)) webview_host_go_forward(webview_id);
             else app_go_history(app, 1);
             return;
         }
         if (x >= 90 && x <= 124) {
-            KPage *page = current_page(app);
-            if (page && page->compat_mode) webview_host_reload();
-            else if (page) app_load_url_with_history(app, page->url, 0);
+            app_reload_active_tab(app);
             return;
         }
         if (x >= 130 && x <= 164) {
@@ -1008,7 +1169,7 @@ static void handle_click(KApp *app, int x, int y) {
         if (point_in(menu_button_rect(app), (float)x, (float)y)) {
             clear_text_focus(app);
             app->menu_open = 1;
-            webview_host_show(0);
+            sync_webview_visibility(app);
             InvalidateRect(app->hwnd, NULL, FALSE);
             return;
         }
@@ -1035,7 +1196,8 @@ static void handle_click(KApp *app, int x, int y) {
         KRect search = home_search_rect(app);
         if (point_in(search, (float)x, (float)y)) {
             app->home_search_focus = 1;
-            app->home_query[0] = 0;
+            char *home_query = current_home_query(app);
+            if (home_query) home_query[0] = 0;
             app->omnibox_focus = 0;
             app->omnibox_select_all = 0;
             InvalidateRect(app->hwnd, NULL, FALSE);
@@ -1052,7 +1214,7 @@ static void handle_click(KApp *app, int x, int y) {
         return;
     }
     if (is_search_page(page) && !page->reader_mode) {
-        float content_y = (float)y - top + app->scroll_y;
+        float content_y = (float)y - top + current_scroll(app);
         KRect search_content = search_box_rect(app);
         search_content.y = 28.0f;
         if (point_in(search_content, (float)x, content_y)) {
@@ -1072,7 +1234,7 @@ static void handle_click(KApp *app, int x, int y) {
         InvalidateRect(app->hwnd, NULL, FALSE);
         return;
     }
-    float content_y = (float)y - top + app->scroll_y;
+    float content_y = (float)y - top + current_scroll(app);
     for (size_t i = 0; i < page->render.count; i++) {
         KRenderCommand *cmd = &page->render.items[i];
         if (cmd->href && cmd->href[0] && point_in(cmd->rect, (float)x, content_y)) {
@@ -1090,7 +1252,7 @@ static void toggle_reader(KApp *app) {
     if (!page) return;
     page->reader_mode = !page->reader_mode;
     set_status(page, page->reader_mode ? "Modo leitura" : "Modo normal");
-    app->scroll_y = 0.0f;
+    set_current_scroll(app, 0.0f);
     layout_active(app);
     InvalidateRect(app->hwnd, NULL, FALSE);
 }
@@ -1121,6 +1283,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         char webview_err[160] = {0};
         webview_host_init(hwnd, 0, app->theme.tab_h + app->theme.toolbar_h, app->width, app->height - app->theme.tab_h - app->theme.toolbar_h, webview_err, sizeof(webview_err));
         adblock_init();
+        app->prefer_webview = 1;
         app->active = -1;
         app_new_tab(app, "kerosene:home");
         return 0;
@@ -1129,7 +1292,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         app->width = LOWORD(lp);
         app->height = HIWORD(lp);
         renderer_resize(app->renderer, app->width, app->height);
-        webview_host_resize(0, (int)chrome_h(app), app->width, app->height - (int)chrome_h(app));
+        sync_webview_visibility(app);
         layout_active(app);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -1152,7 +1315,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
-        app->scroll_y -= (float)delta * 0.55f;
+        set_current_scroll(app, current_scroll(app) - (float)delta * 0.55f);
         clamp_scroll(app);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -1160,10 +1323,12 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CHAR:
         if (app->home_search_focus) {
             if (wp >= 32 && wp < 127) {
-                size_t len = strlen(app->home_query);
-                if (len + 1 < sizeof(app->home_query)) {
-                    app->home_query[len] = (char)wp;
-                    app->home_query[len + 1] = 0;
+                char *home_query = current_home_query(app);
+                size_t cap = sizeof(app->tabs[0].home_query);
+                size_t len = home_query ? strlen(home_query) : 0;
+                if (home_query && len + 1 < cap) {
+                    home_query[len] = (char)wp;
+                    home_query[len + 1] = 0;
                 }
             }
             InvalidateRect(hwnd, NULL, FALSE);
@@ -1195,20 +1360,23 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (app->home_search_focus) {
             if (wp == VK_RETURN) {
-                if (app->home_query[0]) {
-                    app_load_url(app, app->home_query);
+                char *home_query = current_home_query(app);
+                if (home_query && home_query[0]) {
+                    app_load_url(app, home_query);
                 }
                 return 0;
             }
             if (wp == VK_BACK) {
-                size_t len = strlen(app->home_query);
-                if (len) app->home_query[len - 1] = 0;
+                char *home_query = current_home_query(app);
+                size_t len = home_query ? strlen(home_query) : 0;
+                if (len) home_query[len - 1] = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
             if (wp == VK_ESCAPE) {
                 app->home_search_focus = 0;
-                app->home_query[0] = 0;
+                char *home_query = current_home_query(app);
+                if (home_query) home_query[0] = 0;
                 InvalidateRect(hwnd, NULL, FALSE);
                 return 0;
             }
@@ -1236,13 +1404,15 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         if (alt && wp == VK_LEFT) {
             KPage *page = current_page(app);
-            if (page && page->compat_mode && webview_host_can_go_back()) webview_host_go_back();
+            int webview_id = current_webview_id(app);
+            if (page && page->compat_mode && webview_host_can_go_back(webview_id)) webview_host_go_back(webview_id);
             else app_go_history(app, -1);
             return 0;
         }
         if (alt && wp == VK_RIGHT) {
             KPage *page = current_page(app);
-            if (page && page->compat_mode && webview_host_can_go_forward()) webview_host_go_forward();
+            int webview_id = current_webview_id(app);
+            if (page && page->compat_mode && webview_host_can_go_forward(webview_id)) webview_host_go_forward(webview_id);
             else app_go_history(app, 1);
             return 0;
         }
@@ -1251,9 +1421,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (wp == VK_F5) {
-            KPage *page = current_page(app);
-            if (page && page->compat_mode) webview_host_reload();
-            else if (page) app_load_url_with_history(app, page->url, 0);
+            app_reload_active_tab(app);
             return 0;
         }
         if (app->omnibox_focus) {

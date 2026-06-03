@@ -249,14 +249,16 @@ void platform_open_external(const char *url);
 bool win32_register_window_class(HINSTANCE instance, const wchar_t *class_name, WNDPROC proc);
 
 bool webview_host_init(HWND hwnd, int x, int y, int w, int h, char *err, size_t err_cap);
+int webview_host_create_tab(void);
+void webview_host_close_tab(int tab_id);
 void webview_host_resize(int x, int y, int w, int h);
-void webview_host_show(int show);
-void webview_host_navigate(const char *url);
-void webview_host_reload(void);
-void webview_host_go_back(void);
-void webview_host_go_forward(void);
-int webview_host_can_go_back(void);
-int webview_host_can_go_forward(void);
+void webview_host_activate(int tab_id);
+void webview_host_navigate(int tab_id, const char *url);
+void webview_host_reload(int tab_id);
+void webview_host_go_back(int tab_id);
+void webview_host_go_forward(int tab_id);
+int webview_host_can_go_back(int tab_id);
+int webview_host_can_go_forward(int tab_id);
 void webview_host_destroy(void);
 
 #ifdef __cplusplus
