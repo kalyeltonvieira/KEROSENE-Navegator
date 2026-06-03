@@ -288,8 +288,9 @@ static int parse_wiby(const char *html, KSearchResult *results, int max_results)
     return count;
 }
 
-int search_fetch_results(const char *query, KSearchResult *results, int max_results, char *provider, size_t provider_cap, char *total_label, size_t total_label_cap, char *err, size_t err_cap) {
+int search_fetch_results(const char *query, int page, KSearchResult *results, int max_results, char *provider, size_t provider_cap, char *total_label, size_t total_label_cap, char *err, size_t err_cap) {
     if (!query || !*query || !results || max_results <= 0) return 0;
+    if (page < 1) page = 1;
     memset(results, 0, (size_t)max_results * sizeof(results[0]));
     if (provider && provider_cap) provider[0] = 0;
     if (total_label && total_label_cap) total_label[0] = 0;
@@ -299,23 +300,24 @@ int search_fetch_results(const char *query, KSearchResult *results, int max_resu
     char url[K_MAX_URL];
     KHttpResponse response;
     char local_err[256] = {0};
-    snprintf(url, sizeof(url), "https://www.bing.com/search?q=%s", encoded);
+    int first = (page - 1) * max_results + 1;
+    snprintf(url, sizeof(url), "https://www.bing.com/search?q=%s&first=%d", encoded, first);
     if (http_get(url, &response, local_err, sizeof(local_err))) {
         int n = parse_bing(response.body, results, max_results);
         parse_bing_total_label(response.body, total_label, total_label_cap);
         http_response_free(&response);
         if (n > 0) {
-            strncpy(provider, "Bing web index", provider_cap - 1);
+            snprintf(provider, provider_cap, "Bing web index - pagina %d", page);
             return n;
         }
     }
 
-    snprintf(url, sizeof(url), "https://wiby.me/?q=%s", encoded);
+    snprintf(url, sizeof(url), "https://wiby.me/?q=%s&p=%d", encoded, page);
     if (http_get(url, &response, local_err, sizeof(local_err))) {
         int n = parse_wiby(response.body, results, max_results);
         http_response_free(&response);
         if (n > 0) {
-            strncpy(provider, "Wiby fallback", provider_cap - 1);
+            snprintf(provider, provider_cap, "Wiby fallback - pagina %d", page);
             if (total_label && total_label_cap) snprintf(total_label, total_label_cap, "resultados encontrados");
             return n;
         }

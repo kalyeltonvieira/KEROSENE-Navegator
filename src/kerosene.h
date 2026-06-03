@@ -136,6 +136,7 @@ typedef struct KPage {
     char search_total_label[128];
     KSearchResult search_results[K_MAX_SEARCH_RESULTS];
     int search_count;
+    int search_page;
     int compat_mode;
     size_t bytes_used;
     int reader_mode;
@@ -215,7 +216,7 @@ void adblock_init(void);
 bool adblock_should_block(const char *url);
 bool http_get(const char *url, KHttpResponse *out, char *err, size_t err_cap);
 void http_response_free(KHttpResponse *response);
-int search_fetch_results(const char *query, KSearchResult *results, int max_results, char *provider, size_t provider_cap, char *total_label, size_t total_label_cap, char *err, size_t err_cap);
+int search_fetch_results(const char *query, int page, KSearchResult *results, int max_results, char *provider, size_t provider_cap, char *total_label, size_t total_label_cap, char *err, size_t err_cap);
 const char *quic_status_text(void);
 bool cache_get(const char *url, KHttpResponse *out);
 void cache_put(const char *url, const KHttpResponse *response);
