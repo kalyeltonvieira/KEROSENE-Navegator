@@ -1,6 +1,7 @@
 CC ?= gcc
 CXX ?= g++
 CARGO ?= cargo
+WINDRES ?= windres
 
 APP := kerosene.exe
 BUILD := build
@@ -39,9 +40,11 @@ SRC := \
 	src/platform/file_io.c
 
 CPP_SRC := src/platform/webview2_host.cpp
+RC_SRC := src/resources/kerosene.rc
 
 OBJ := $(SRC:src/%.c=$(BUILD)/%.o)
 CPP_OBJ := $(CPP_SRC:src/%.cpp=$(BUILD)/%.o)
+RES_OBJ := $(BUILD)/resources/kerosene.res.o
 
 .PHONY: all clean run rust
 
@@ -52,8 +55,8 @@ rust: $(RUST_LIB)
 $(RUST_LIB): Cargo.toml src/ui/lib.rs
 	$(CARGO) build --release
 
-$(APP): $(OBJ) $(CPP_OBJ) $(RUST_LIB)
-	$(CXX) $(LDFLAGS) -o $@ $(OBJ) $(CPP_OBJ) $(RUST_LIB) $(WEBVIEW2_LIB) $(LIBS)
+$(APP): $(OBJ) $(CPP_OBJ) $(RES_OBJ) $(RUST_LIB)
+	$(CXX) $(LDFLAGS) -o $@ $(OBJ) $(CPP_OBJ) $(RES_OBJ) $(RUST_LIB) $(WEBVIEW2_LIB) $(LIBS)
 	powershell -NoProfile -Command "Copy-Item -LiteralPath '$(WEBVIEW2_DLL)' -Destination 'WebView2Loader.dll' -Force"
 
 $(BUILD)/%.o: src/%.c src/kerosene.h
@@ -63,6 +66,10 @@ $(BUILD)/%.o: src/%.c src/kerosene.h
 $(BUILD)/%.o: src/%.cpp src/kerosene.h
 	@if not exist "$(dir $@)" mkdir "$(dir $@)"
 	$(CXX) $(CXXFLAGS) -Isrc -c $< -o $@
+
+$(RES_OBJ): $(RC_SRC) src/resource.h src/resources/kerosene.ico
+	@if not exist "$(dir $@)" mkdir "$(dir $@)"
+	$(WINDRES) -Isrc $< -O coff -o $@
 
 run: $(APP)
 	.\$(APP)

@@ -33,6 +33,7 @@ typedef struct KApp {
     int omnibox_cursor;
     int home_search_focus;
     int menu_open;
+    int search_engine;
     int prefer_webview;
     int dark_mode;
     int theme_animating;
@@ -66,6 +67,14 @@ static const KShortcut HOME_SHORTCUTS[] = {
 #define K_THEME_ANIM_MS 220.0f
 #define K_WINDOW_BUTTON_W 46.0f
 #define K_WINDOW_BUTTONS_W (K_WINDOW_BUTTON_W * 3.0f)
+
+enum {
+    K_SEARCH_ENGINE_GOOGLE = 0,
+    K_SEARCH_ENGINE_BING,
+    K_SEARCH_ENGINE_DUCKDUCKGO,
+    K_SEARCH_ENGINE_WIBY,
+    K_SEARCH_ENGINE_COUNT
+};
 
 static KColor theme_color(KApp *app, uint32_t argb) {
     float t = app ? app->theme_t : 0.0f;
@@ -333,12 +342,45 @@ static void text_select_all(KApp *app) {
     *select_all = text[0] != 0;
 }
 
-static int cursor_from_x(const char *text, float text_x, float char_w, float x) {
+static float text_width(KApp *app, const char *text, int len, float font_size, int weight) {
+    if (!app || !app->renderer || !text || len <= 0) return 0.0f;
+    len = clamp_cursor(text, len);
+    if (len <= 0) return 0.0f;
+    char prefix[K_MAX_URL];
+    size_t n = (size_t)len;
+    if (n >= sizeof(prefix)) n = sizeof(prefix) - 1;
+    memcpy(prefix, text, n);
+    prefix[n] = 0;
+    return renderer_measure_text_width(app->renderer, prefix, font_size, weight);
+}
+
+static float caret_x_for_text(KApp *app, const char *text, int cursor, float text_x, float max_w, float font_size, int weight) {
+    float width = text_width(app, text, cursor, font_size, weight);
+    if (width > max_w) width = max_w;
+    return text_x + width;
+}
+
+static int cursor_from_x(KApp *app, const char *text, float text_x, float x, float font_size, int weight) {
     int len = text_len_i(text);
-    int pos = (int)floorf((x - text_x) / char_w + 0.5f);
-    if (pos < 0) return 0;
-    if (pos > len) return len;
-    return pos;
+    float target = x - text_x;
+    if (target <= 0.0f || len <= 0) return 0;
+
+    float total = text_width(app, text, len, font_size, weight);
+    if (target >= total) return len;
+
+    int lo = 0;
+    int hi = len;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        float w = text_width(app, text, mid, font_size, weight);
+        if (w < target) lo = mid + 1;
+        else hi = mid;
+    }
+
+    int prev = lo > 0 ? lo - 1 : 0;
+    float prev_w = text_width(app, text, prev, font_size, weight);
+    float next_w = text_width(app, text, lo, font_size, weight);
+    return fabsf(target - prev_w) <= fabsf(next_w - target) ? prev : lo;
 }
 
 static void clipboard_set_text(HWND hwnd, const char *text) {
@@ -534,6 +576,56 @@ static void make_search_url(const char *query, int page, char *out, size_t cap) 
     snprintf(out, cap, "kerosene:search?q=%s&page=%d", encoded, page);
 }
 
+static const char *search_engine_label(int engine) {
+    switch (engine) {
+    case K_SEARCH_ENGINE_BING: return "Bing";
+    case K_SEARCH_ENGINE_DUCKDUCKGO: return "DuckDuckGo";
+    case K_SEARCH_ENGINE_WIBY: return "Wiby";
+    case K_SEARCH_ENGINE_GOOGLE:
+    default:
+        return "Google principal";
+    }
+}
+
+static const char *search_engine_name(int engine) {
+    switch (engine) {
+    case K_SEARCH_ENGINE_BING: return "Bing";
+    case K_SEARCH_ENGINE_DUCKDUCKGO: return "DuckDuckGo";
+    case K_SEARCH_ENGINE_WIBY: return "Wiby";
+    case K_SEARCH_ENGINE_GOOGLE:
+    default:
+        return "Google";
+    }
+}
+
+static void make_search_engine_url(int engine, const char *query, char *out, size_t cap) {
+    char encoded[512];
+    url_encode_query(query, encoded, sizeof(encoded));
+    if (!query || !*query) {
+        if (engine == K_SEARCH_ENGINE_BING) snprintf(out, cap, "https://www.bing.com/");
+        else if (engine == K_SEARCH_ENGINE_DUCKDUCKGO) snprintf(out, cap, "https://duckduckgo.com/");
+        else if (engine == K_SEARCH_ENGINE_WIBY) snprintf(out, cap, "https://wiby.me/");
+        else snprintf(out, cap, "https://www.google.com/");
+        return;
+    }
+
+    switch (engine) {
+    case K_SEARCH_ENGINE_BING:
+        snprintf(out, cap, "https://www.bing.com/search?q=%s", encoded);
+        break;
+    case K_SEARCH_ENGINE_DUCKDUCKGO:
+        snprintf(out, cap, "https://duckduckgo.com/?q=%s", encoded);
+        break;
+    case K_SEARCH_ENGINE_WIBY:
+        snprintf(out, cap, "https://wiby.me/?q=%s", encoded);
+        break;
+    case K_SEARCH_ENGINE_GOOGLE:
+    default:
+        snprintf(out, cap, "https://www.google.com/search?q=%s", encoded);
+        break;
+    }
+}
+
 static void page_clear(KPage *page) {
     cyclone_free_dom(page->document);
     page->document = NULL;
@@ -617,10 +709,18 @@ static void make_error_page(char *out, size_t cap, const char *url, const char *
         url ? url : "", err ? err : "erro desconhecido");
 }
 
-static void normalize_or_copy(const char *input, char *out, size_t cap) {
+static void normalize_or_copy(KApp *app, const char *input, char *out, size_t cap) {
     if (!kerosene_ui_normalize_omnibox(input, out, cap)) {
         strncpy(out, "kerosene:home", cap - 1);
         out[cap - 1] = 0;
+        return;
+    }
+    if (!_strnicmp(out, "kerosene:search?q=", 18)) {
+        char query[256];
+        int page = 1;
+        parse_search_url(out, query, sizeof(query), &page);
+        (void)page;
+        make_search_engine_url(app ? app->search_engine : K_SEARCH_ENGINE_GOOGLE, query, out, cap);
     }
 }
 
@@ -658,7 +758,7 @@ static void app_load_url_with_history(KApp *app, const char *input, int add_hist
     clear_text_focus(app);
 
     char url[K_MAX_URL];
-    normalize_or_copy(input, url, sizeof(url));
+    normalize_or_copy(app, input, url, sizeof(url));
     if (add_history) {
         history_record(tab, url);
     }
@@ -827,6 +927,12 @@ static void app_toggle_site_engine(KApp *app) {
     }
 }
 
+static void app_cycle_search_engine(KApp *app) {
+    if (!app) return;
+    app->search_engine = (app->search_engine + 1) % K_SEARCH_ENGINE_COUNT;
+    InvalidateRect(app->hwnd, NULL, FALSE);
+}
+
 static void resolve_url(const char *base, const char *href, char *out, size_t cap) {
     if (!href || !*href) {
         strncpy(out, base ? base : "kerosene:home", cap - 1);
@@ -845,7 +951,7 @@ static void resolve_url(const char *base, const char *href, char *out, size_t ca
     char scheme_host[K_MAX_URL] = {0};
     const char *scheme = strstr(base ? base : "", "://");
     if (!scheme) {
-        normalize_or_copy(href, out, cap);
+        normalize_or_copy(NULL, href, out, cap);
         return;
     }
     const char *host_start = scheme + 3;
@@ -1026,24 +1132,28 @@ static KRect settings_theme_row(KApp *app) {
     return settings_row(app, 0);
 }
 
-static KRect settings_engine_row(KApp *app) {
+static KRect settings_search_row(KApp *app) {
     return settings_row(app, 1);
 }
 
-static KRect settings_new_tab_row(KApp *app) {
+static KRect settings_engine_row(KApp *app) {
     return settings_row(app, 2);
 }
 
-static KRect settings_reload_row(KApp *app) {
+static KRect settings_new_tab_row(KApp *app) {
     return settings_row(app, 3);
 }
 
-static KRect settings_reader_row(KApp *app) {
+static KRect settings_reload_row(KApp *app) {
     return settings_row(app, 4);
 }
 
-static KRect settings_external_row(KApp *app) {
+static KRect settings_reader_row(KApp *app) {
     return settings_row(app, 5);
+}
+
+static KRect settings_external_row(KApp *app) {
+    return settings_row(app, 6);
 }
 
 static void draw_settings_switch(KApp *app, KRect row, int on, int enabled) {
@@ -1084,6 +1194,9 @@ static void draw_settings_panel(KApp *app) {
     draw_settings_row(app, theme_row, "Tema", app->dark_mode ? "Preto" : "Claro", 1);
     draw_settings_switch(app, theme_row, app->dark_mode, 1);
 
+    KRect search_row = settings_search_row(app);
+    draw_settings_row(app, search_row, "Busca padrao", search_engine_label(app->search_engine), 1);
+
     KRect engine_row = settings_engine_row(app);
     draw_settings_row(app, engine_row, "Motor de sites", app->prefer_webview ? "WebView2 compatibilidade" : "Renderizador nativo", 1);
     draw_settings_switch(app, engine_row, app->prefer_webview, 1);
@@ -1099,7 +1212,9 @@ static void draw_settings_panel(KApp *app) {
     int external_enabled = page && page->url[0] && strstr(page->url, "://");
     draw_settings_row(app, settings_external_row(app), "Abrir no navegador", external_enabled ? page->url : "Indisponivel para paginas internas", external_enabled);
 
-    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 64.0f, p.w - 36.0f, 18.0f}, muted, "Busca: Bing com fallback Wiby", 12.0f, 400, 0);
+    char search_footer[96];
+    snprintf(search_footer, sizeof(search_footer), "Busca: %s", search_engine_label(app->search_engine));
+    renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 64.0f, p.w - 36.0f, 18.0f}, muted, search_footer, 12.0f, 400, 0);
     renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 42.0f, p.w - 36.0f, 18.0f}, muted, "Abas: estado preservado", 12.0f, 400, 0);
     renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 20.0f, p.w - 36.0f, 18.0f}, muted, "Kerosene 0.1", 12.0f, 400, 0);
 }
@@ -1310,18 +1425,23 @@ static void draw_native_home(KApp *app) {
     }
     const char *home_query = current_home_query(app);
     if (!home_query) home_query = "";
-    const char *home_text = home_query[0] ? home_query : "Pesquise no Wiby ou digite uma URL";
+    char home_placeholder[96];
+    snprintf(home_placeholder, sizeof(home_placeholder), "Pesquise no %s ou digite uma URL", search_engine_name(app->search_engine));
+    const char *home_text = home_query[0] ? home_query : home_placeholder;
     int *home_cursor_ptr = current_home_cursor(app);
     int *home_select_ptr = current_home_select_all(app);
     int home_cursor = home_cursor_ptr ? clamp_cursor(home_query, *home_cursor_ptr) : text_len_i(home_query);
+    float home_text_x = search.x + 54.0f;
+    float home_text_w = search.w - 74.0f;
     if (app->home_search_focus && home_select_ptr && *home_select_ptr && home_query[0]) {
-        renderer_fill_rect(app->renderer, (KRect){search.x + 52.0f, search.y + 10.0f, fminf(search.w - 68.0f, (float)strlen(home_query) * 8.1f + 8.0f), 28.0f},
+        float select_w = fminf(home_text_w, text_width(app, home_query, text_len_i(home_query), 15.0f, 400) + 8.0f);
+        renderer_fill_rect(app->renderer, (KRect){home_text_x - 3.0f, search.y + 10.0f, select_w, 28.0f},
             kcolor_rgba(0.22f, 0.48f, 0.88f, 0.22f), 5.0f);
     }
-    renderer_draw_text(app->renderer, (KRect){search.x + 54.0f, search.y + 14.0f, search.w - 74.0f, 22.0f},
+    renderer_draw_text(app->renderer, (KRect){home_text_x, search.y + 14.0f, home_text_w, 22.0f},
         home_query[0] ? text : muted, home_text, 15.0f, 400, 0);
     if (app->home_search_focus && (!home_select_ptr || !*home_select_ptr)) {
-        float cx = search.x + 56.0f + fminf((float)home_cursor * 8.0f, search.w - 74.0f);
+        float cx = caret_x_for_text(app, home_query, home_cursor, home_text_x, home_text_w, 15.0f, 400);
         renderer_fill_rect(app->renderer, (KRect){cx, search.y + 14.0f, 1.0f, 21.0f}, theme_color(app, app->theme.accent), 0);
     }
 
@@ -1444,22 +1564,27 @@ static void draw_ui(KApp *app) {
     int home_bar = bar_page && is_home_page(bar_page) && !app->omnibox_focus;
     const char *bar_text = home_bar ? "" : app->omnibox;
     int bar_cursor = clamp_cursor(bar_text, app->omnibox_cursor);
+    float bar_text_x = box_x + 36.0f;
+    float bar_text_w = box_w - 48.0f;
     if (!_strnicmp(bar_text, "https://", 8)) {
         draw_lock_icon(app, box_x + 10.0f, y + 5.0f, muted);
     } else {
         draw_search_icon(app, box_x + 9.0f, y + 6.0f, muted);
     }
     if (app->omnibox_focus && app->omnibox_select_all && bar_text[0]) {
-        renderer_fill_rect(app->renderer, (KRect){box_x + 33.0f, y + 6.0f, fminf(box_w - 44.0f, (float)strlen(bar_text) * 7.1f + 6.0f), 22.0f},
+        float select_w = fminf(bar_text_w, text_width(app, bar_text, text_len_i(bar_text), 13.0f, 400) + 6.0f);
+        renderer_fill_rect(app->renderer, (KRect){bar_text_x - 3.0f, y + 6.0f, select_w, 22.0f},
             kcolor_rgba(0.22f, 0.48f, 0.88f, 0.22f), 3.0f);
     }
     if (bar_text[0]) {
-        renderer_draw_text(app->renderer, (KRect){box_x + 36.0f, y + 8.0f, box_w - 48.0f, 20.0f}, text, bar_text, 13.0f, 400, 0);
+        renderer_draw_text(app->renderer, (KRect){bar_text_x, y + 8.0f, bar_text_w, 20.0f}, text, bar_text, 13.0f, 400, 0);
     } else {
-        renderer_draw_text(app->renderer, (KRect){box_x + 36.0f, y + 8.0f, box_w - 48.0f, 20.0f}, muted, "Pesquise no Wiby ou digite uma URL", 13.0f, 400, 0);
+        char bar_placeholder[96];
+        snprintf(bar_placeholder, sizeof(bar_placeholder), "Pesquise no %s ou digite uma URL", search_engine_name(app->search_engine));
+        renderer_draw_text(app->renderer, (KRect){bar_text_x, y + 8.0f, bar_text_w, 20.0f}, muted, bar_placeholder, 13.0f, 400, 0);
     }
     if (app->omnibox_focus && !app->omnibox_select_all) {
-        float cursor_x = box_x + 37.0f + fminf((float)bar_cursor * 7.0f, box_w - 54.0f);
+        float cursor_x = caret_x_for_text(app, bar_text, bar_cursor, bar_text_x, bar_text_w, 13.0f, 400);
         renderer_fill_rect(app->renderer, (KRect){cursor_x, y + 8.0f, 1.0f, 19.0f}, theme_color(app, app->theme.accent), 0);
     }
     draw_theme_toggle(app);
@@ -1554,6 +1679,10 @@ static void handle_click(KApp *app, int x, int y) {
         if (point_in(settings_theme_row(app), (float)x, (float)y)) {
             theme_start_toggle(app);
             InvalidateRect(app->hwnd, NULL, FALSE);
+            return;
+        }
+        if (point_in(settings_search_row(app), (float)x, (float)y)) {
+            app_cycle_search_engine(app);
             return;
         }
         if (point_in(settings_engine_row(app), (float)x, (float)y)) {
@@ -1663,7 +1792,7 @@ static void handle_click(KApp *app, int x, int y) {
         app->omnibox_focus = x >= box_x && x <= box_x + box_w;
         app->omnibox_select_all = 0;
         if (app->omnibox_focus) {
-            app->omnibox_cursor = cursor_from_x(app->omnibox, box_x + 37.0f, 7.0f, (float)x);
+            app->omnibox_cursor = cursor_from_x(app, app->omnibox, box_x + 36.0f, (float)x, 13.0f, 400);
             app->home_search_focus = 0;
         }
         InvalidateRect(app->hwnd, NULL, FALSE);
@@ -1686,7 +1815,7 @@ static void handle_click(KApp *app, int x, int y) {
             char *home_query = current_home_query(app);
             int *home_cursor = current_home_cursor(app);
             int *home_select = current_home_select_all(app);
-            if (home_cursor) *home_cursor = cursor_from_x(home_query ? home_query : "", search.x + 56.0f, 8.0f, (float)x);
+            if (home_cursor) *home_cursor = cursor_from_x(app, home_query ? home_query : "", search.x + 54.0f, (float)x, 15.0f, 400);
             if (home_select) *home_select = 0;
             app->omnibox_focus = 0;
             app->omnibox_select_all = 0;
@@ -1809,6 +1938,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         char webview_err[160] = {0};
         webview_host_init(hwnd, 0, app->theme.tab_h + app->theme.toolbar_h, app->width, app->height - app->theme.tab_h - app->theme.toolbar_h, webview_err, sizeof(webview_err));
         adblock_init();
+        app->search_engine = K_SEARCH_ENGINE_GOOGLE;
         app->prefer_webview = 1;
         app->active = -1;
         app_new_tab(app, "kerosene:home");

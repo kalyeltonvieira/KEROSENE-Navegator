@@ -229,6 +229,7 @@ void renderer_fill_rect(KRenderer *renderer, KRect rect, KColor color, float rad
 void renderer_draw_border(KRenderer *renderer, KRect rect, KColor color, float width, float radius);
 void renderer_draw_line(KRenderer *renderer, float x0, float y0, float x1, float y1, KColor color, float width);
 void renderer_draw_text(KRenderer *renderer, KRect rect, KColor color, const char *text, float font_size, int font_weight, int underline);
+float renderer_measure_text_width(KRenderer *renderer, const char *text, float font_size, int font_weight);
 void renderer_end(KRenderer *renderer);
 void renderer_free(KRenderer *renderer);
 

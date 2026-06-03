@@ -175,6 +175,40 @@ void renderer_draw_text(KRenderer *r, KRect rect, KColor color, const char *text
     kfree(wide);
 }
 
+float renderer_measure_text_width(KRenderer *r, const char *text, float font_size, int font_weight) {
+    if (!r || !r->dwrite_factory || !text || !*text) return 0.0f;
+    int wlen = 0;
+    wchar_t *wide = platform_utf8_to_wide(text, &wlen);
+    if (!wide) return 0.0f;
+
+    IDWriteTextFormat *format = (IDWriteTextFormat *)text_atlas_format(r->text_atlas, font_size, font_weight);
+    if (!format) {
+        kfree(wide);
+        return 0.0f;
+    }
+
+    IDWriteTextLayout *layout = NULL;
+    HRESULT hr = IDWriteFactory_CreateTextLayout(
+        r->dwrite_factory,
+        wide,
+        (UINT32)wlen,
+        format,
+        100000.0f,
+        font_size * 3.0f + 16.0f,
+        &layout);
+    kfree(wide);
+    if (FAILED(hr) || !layout) return 0.0f;
+
+    DWRITE_TEXT_METRICS metrics;
+    memset(&metrics, 0, sizeof(metrics));
+    float width = 0.0f;
+    if (SUCCEEDED(IDWriteTextLayout_GetMetrics(layout, &metrics))) {
+        width = metrics.widthIncludingTrailingWhitespace;
+    }
+    IDWriteTextLayout_Release(layout);
+    return width;
+}
+
 void renderer_end(KRenderer *r) {
     if (!r || !r->target) return;
     HRESULT hr = ID2D1HwndRenderTarget_EndDraw(r->target, NULL, NULL);

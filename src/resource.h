@@ -1,0 +1,6 @@
+#ifndef KEROSENE_RESOURCE_H
+#define KEROSENE_RESOURCE_H
+
+#define IDI_KEROSENE_ICON 101
+
+#endif
