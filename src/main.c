@@ -33,7 +33,9 @@ typedef struct KApp {
     int omnibox_cursor;
     int home_search_focus;
     int menu_open;
+    int search_picker_open;
     int search_engine;
+    float search_picker_scroll;
     int prefer_webview;
     int dark_mode;
     int theme_animating;
@@ -68,13 +70,213 @@ static const KShortcut HOME_SHORTCUTS[] = {
 #define K_WINDOW_BUTTON_W 46.0f
 #define K_WINDOW_BUTTONS_W (K_WINDOW_BUTTON_W * 3.0f)
 
-enum {
-    K_SEARCH_ENGINE_GOOGLE = 0,
-    K_SEARCH_ENGINE_BING,
-    K_SEARCH_ENGINE_DUCKDUCKGO,
-    K_SEARCH_ENGINE_WIBY,
-    K_SEARCH_ENGINE_COUNT
+typedef struct KSearchEngine {
+    const char *category;
+    const char *label;
+    const char *home_url;
+    const char *query_url;
+} KSearchEngine;
+
+static const KSearchEngine SEARCH_ENGINES[] = {
+    { "Buscadores gerais", "Google", "https://www.google.com", "https://www.google.com/search?q=%s" },
+    { "Buscadores gerais", "Bing", "https://www.bing.com", "https://www.bing.com/search?q=%s" },
+    { "Buscadores gerais", "Yahoo Search", "https://search.yahoo.com", "https://search.yahoo.com/search?p=%s" },
+    { "Buscadores gerais", "DuckDuckGo", "https://duckduckgo.com", "https://duckduckgo.com/?q=%s" },
+    { "Buscadores gerais", "Brave Search", "https://search.brave.com", "https://search.brave.com/search?q=%s" },
+    { "Buscadores gerais", "Startpage", "https://www.startpage.com", "https://www.startpage.com/sp/search?query=%s" },
+    { "Buscadores gerais", "Ecosia", "https://www.ecosia.org", "https://www.ecosia.org/search?q=%s" },
+    { "Buscadores gerais", "Qwant", "https://www.qwant.com", "https://www.qwant.com/?q=%s" },
+    { "Buscadores gerais", "Mojeek", "https://www.mojeek.com", "https://www.mojeek.com/search?q=%s" },
+    { "Buscadores gerais", "Yandex", "https://yandex.com", "https://yandex.com/search/?text=%s" },
+    { "Buscadores gerais", "Baidu", "https://www.baidu.com", "https://www.baidu.com/s?wd=%s" },
+    { "Buscadores gerais", "Sogou", "https://www.sogou.com", "https://www.sogou.com/web?query=%s" },
+    { "Buscadores gerais", "Naver", "https://www.naver.com", "https://search.naver.com/search.naver?query=%s" },
+    { "Buscadores gerais", "Daum", "https://www.daum.net", "https://search.daum.net/search?w=tot&q=%s" },
+    { "Buscadores gerais", "Seznam", "https://www.seznam.cz", "https://search.seznam.cz/?q=%s" },
+    { "Buscadores gerais", "Search.com", "https://www.search.com", "https://www.search.com/web?q=%s" },
+    { "Buscadores gerais", "AOL Search", "https://search.aol.com", "https://search.aol.com/aol/search?q=%s" },
+    { "Buscadores gerais", "Dogpile", "https://www.dogpile.com", "https://www.dogpile.com/serp?q=%s" },
+    { "Buscadores gerais", "MetaCrawler", "https://www.metacrawler.com", "https://www.metacrawler.com/serp?q=%s" },
+    { "Buscadores gerais", "WebCrawler", "https://www.webcrawler.com", "https://www.webcrawler.com/serp?q=%s" },
+    { "Buscadores gerais", "Lycos", "https://www.lycos.com", "https://www.lycos.com/search?q=%s" },
+    { "Buscadores gerais", "Excite", "https://www.excite.com", "https://www.excite.com/search?q=%s" },
+    { "Buscadores gerais", "Info.com", "https://www.info.com", "https://www.info.com/serp?q=%s" },
+    { "Buscadores gerais", "Swisscows", "https://swisscows.com", "https://swisscows.com/en/web?query=%s" },
+    { "Buscadores gerais", "You.com", "https://you.com", "https://you.com/search?q=%s" },
+    { "Buscadores gerais", "Kagi", "https://kagi.com", "https://kagi.com/search?q=%s" },
+    { "Buscadores gerais", "Yep", "https://yep.com", "https://yep.com/web?q=%s" },
+    { "Buscadores gerais", "Perplexity", "https://www.perplexity.ai", "https://www.perplexity.ai/search?q=%s" },
+    { "Buscadores gerais", "Andi", "https://andisearch.com", "https://andisearch.com/?query=%s" },
+    { "Buscadores gerais", "Komo", "https://komo.ai", "https://komo.ai/search?q=%s" },
+    { "Buscadores gerais", "iAsk", "https://iask.ai", "https://iask.ai/?q=%s" },
+    { "Buscadores gerais", "Phind", "https://www.phind.com", "https://www.phind.com/search?q=%s" },
+    { "Buscadores gerais", "WolframAlpha", "https://www.wolframalpha.com", "https://www.wolframalpha.com/input?i=%s" },
+    { "Buscadores gerais", "Presearch", "https://presearch.com", "https://presearch.com/search?q=%s" },
+    { "Buscadores gerais", "Petal Search", "https://petalsearch.com", "https://petalsearch.com/search?query=%s" },
+    { "Buscadores gerais", "YaCy", "https://yacy.net", NULL },
+    { "Buscadores gerais", "SearXNG", "https://searx.space", NULL },
+    { "Buscadores gerais", "MetaGer", "https://metager.org", "https://metager.org/meta/meta.ger3?eingabe=%s" },
+    { "Buscadores gerais", "Gibiru", "https://gibiru.com", "https://gibiru.com/results.html?q=%s" },
+    { "Buscadores gerais", "Oscobo", "https://www.oscobo.com", "https://www.oscobo.com/search.php?q=%s" },
+    { "Buscadores gerais", "Lukol", "https://www.lukol.com", "https://www.lukol.com/s.php?q=%s" },
+    { "Buscadores gerais", "Million Short", "https://millionshort.com", "https://millionshort.com/search?q=%s" },
+    { "Buscadores gerais", "Wiby", "https://wiby.me", "https://wiby.me/?q=%s" },
+    { "Buscadores gerais", "Marginalia Search", "https://search.marginalia.nu", "https://search.marginalia.nu/search?query=%s" },
+    { "Buscadores gerais", "Kiddle", "https://www.kiddle.co", "https://www.kiddle.co/s.php?q=%s" },
+    { "Buscadores gerais", "KidzSearch", "https://www.kidzsearch.com", "https://www.kidzsearch.com/search?q=%s" },
+    { "Buscadores gerais", "Blackle", "https://www.blackle.com", "https://www.blackle.com/search?q=%s" },
+    { "Buscadores gerais", "NATE", "https://www.nate.com", "https://search.nate.com/search/all.html?q=%s" },
+    { "Buscadores gerais", "goo.ne.jp", "https://www.goo.ne.jp", "https://search.goo.ne.jp/web.jsp?MT=%s" },
+    { "Buscadores gerais", "SAPO", "https://www.sapo.pt", "https://pesquisa.sapo.pt/?q=%s" },
+    { "Buscadores gerais", "Search.ch", "https://www.search.ch", "https://www.search.ch/?q=%s" },
+    { "Buscadores gerais", "Coc Coc", "https://coccoc.com/search", "https://coccoc.com/search?query=%s" },
+    { "Buscadores gerais", "Rambler", "https://www.rambler.ru", "https://nova.rambler.ru/search?query=%s" },
+    { "Buscadores gerais", "Mail.ru Search", "https://go.mail.ru", "https://go.mail.ru/search?q=%s" },
+
+    { "Academicos e cientificos", "Google Scholar", "https://scholar.google.com", "https://scholar.google.com/scholar?q=%s" },
+    { "Academicos e cientificos", "Semantic Scholar", "https://www.semanticscholar.org", "https://www.semanticscholar.org/search?q=%s" },
+    { "Academicos e cientificos", "BASE", "https://www.base-search.net", "https://www.base-search.net/Search/Results?lookfor=%s" },
+    { "Academicos e cientificos", "CORE", "https://core.ac.uk", "https://core.ac.uk/search?q=%s" },
+    { "Academicos e cientificos", "PubMed", "https://pubmed.ncbi.nlm.nih.gov", "https://pubmed.ncbi.nlm.nih.gov/?term=%s" },
+    { "Academicos e cientificos", "Europe PMC", "https://europepmc.org", "https://europepmc.org/search?query=%s" },
+    { "Academicos e cientificos", "Science.gov", "https://www.science.gov", "https://www.science.gov/scigov/desktop/en/search.html?query=%s" },
+    { "Academicos e cientificos", "WorldWideScience", "https://worldwidescience.org", "https://worldwidescience.org/wws/desktop/en/results.html?query=%s" },
+    { "Academicos e cientificos", "RefSeek", "https://www.refseek.com", "https://www.refseek.com/search?q=%s" },
+    { "Academicos e cientificos", "OpenAlex", "https://openalex.org", "https://openalex.org/search?q=%s" },
+    { "Academicos e cientificos", "Lens.org", "https://www.lens.org", "https://www.lens.org/lens/search/scholar/list?q=%s" },
+    { "Academicos e cientificos", "Dimensions", "https://www.dimensions.ai", "https://app.dimensions.ai/discover/publication?search_mode=content&search_text=%s" },
+    { "Academicos e cientificos", "Crossref", "https://www.crossref.org", "https://www.crossref.org/search/?q=%s" },
+    { "Academicos e cientificos", "DOAJ", "https://doaj.org", "https://doaj.org/search/articles?q=%s" },
+    { "Academicos e cientificos", "arXiv", "https://arxiv.org", "https://arxiv.org/search/?query=%s&searchtype=all" },
+    { "Academicos e cientificos", "JSTOR", "https://www.jstor.org", "https://www.jstor.org/action/doBasicSearch?Query=%s" },
+    { "Academicos e cientificos", "ResearchGate", "https://www.researchgate.net", "https://www.researchgate.net/search?q=%s" },
+
+    { "Imagens", "Google Images", "https://images.google.com", "https://www.google.com/search?tbm=isch&q=%s" },
+    { "Imagens", "Bing Images", "https://www.bing.com/images", "https://www.bing.com/images/search?q=%s" },
+    { "Imagens", "Yahoo Images", "https://images.search.yahoo.com", "https://images.search.yahoo.com/search/images?p=%s" },
+    { "Imagens", "Yandex Images", "https://yandex.com/images", "https://yandex.com/images/search?text=%s" },
+    { "Imagens", "Baidu Images", "https://image.baidu.com", "https://image.baidu.com/search/index?tn=baiduimage&word=%s" },
+    { "Imagens", "TinEye", "https://tineye.com", NULL },
+    { "Imagens", "Openverse", "https://openverse.org", "https://openverse.org/search/?q=%s" },
+    { "Imagens", "Flickr Search", "https://www.flickr.com/search", "https://www.flickr.com/search/?text=%s" },
+    { "Imagens", "Pinterest", "https://www.pinterest.com", "https://www.pinterest.com/search/pins/?q=%s" },
+    { "Imagens", "Unsplash", "https://unsplash.com", "https://unsplash.com/s/photos/%s" },
+    { "Imagens", "Pexels", "https://www.pexels.com", "https://www.pexels.com/search/%s/" },
+    { "Imagens", "Pixabay", "https://pixabay.com", "https://pixabay.com/images/search/%s/" },
+    { "Imagens", "Shutterstock", "https://www.shutterstock.com", "https://www.shutterstock.com/search/%s" },
+    { "Imagens", "Getty Images", "https://www.gettyimages.com", "https://www.gettyimages.com/search/2/image?phrase=%s" },
+    { "Imagens", "Alamy", "https://www.alamy.com", "https://www.alamy.com/search.html?qt=%s" },
+
+    { "Videos", "YouTube", "https://www.youtube.com", "https://www.youtube.com/results?search_query=%s" },
+    { "Videos", "Bing Videos", "https://www.bing.com/videos", "https://www.bing.com/videos/search?q=%s" },
+    { "Videos", "Google Videos", "https://www.google.com/videohp", "https://www.google.com/search?tbm=vid&q=%s" },
+    { "Videos", "Yahoo Video", "https://video.search.yahoo.com", "https://video.search.yahoo.com/search/video?p=%s" },
+    { "Videos", "Vimeo", "https://vimeo.com/search", "https://vimeo.com/search?q=%s" },
+    { "Videos", "Dailymotion", "https://www.dailymotion.com", "https://www.dailymotion.com/search/%s/videos" },
+    { "Videos", "TikTok Search", "https://www.tiktok.com/search", "https://www.tiktok.com/search?q=%s" },
+    { "Videos", "Twitch Search", "https://www.twitch.tv/search", "https://www.twitch.tv/search?term=%s" },
+    { "Videos", "Sepia Search", "https://sepiasearch.org", "https://sepiasearch.org/search?search=%s" },
+    { "Videos", "Petey Vid", "https://www.peteyvid.com", "https://www.peteyvid.com/?s=%s" },
+
+    { "Mapas", "Google Maps", "https://maps.google.com", "https://www.google.com/maps/search/%s" },
+    { "Mapas", "Bing Maps", "https://www.bing.com/maps", "https://www.bing.com/maps?q=%s" },
+    { "Mapas", "Apple Maps", "https://maps.apple.com", "https://maps.apple.com/?q=%s" },
+    { "Mapas", "OpenStreetMap", "https://www.openstreetmap.org", "https://www.openstreetmap.org/search?query=%s" },
+    { "Mapas", "MapQuest", "https://www.mapquest.com", "https://www.mapquest.com/search/%s" },
+    { "Mapas", "HERE WeGo", "https://wego.here.com", "https://wego.here.com/search/%s" },
+    { "Mapas", "Baidu Maps", "https://map.baidu.com", "https://map.baidu.com/search/%s" },
+    { "Mapas", "Tencent Maps", "https://map.qq.com", "https://map.qq.com/search/result?keyword=%s" },
+    { "Mapas", "Yandex Maps", "https://yandex.com/maps", "https://yandex.com/maps/?text=%s" },
+    { "Mapas", "Petal Maps", "https://petalmaps.com", "https://petalmaps.com/search/%s" },
+    { "Mapas", "WikiMapia", "https://wikimapia.org", "https://wikimapia.org/#search=%s" },
+    { "Mapas", "Wikiloc", "https://www.wikiloc.com", "https://www.wikiloc.com/wikiloc/find.do?q=%s" },
+    { "Mapas", "Geoportail", "https://www.geoportail.gouv.fr", "https://www.geoportail.gouv.fr/recherche/%s" },
+    { "Mapas", "MapmyIndia / Mappls", "https://www.mappls.com", "https://www.mappls.com/search/%s" },
+
+    { "Noticias", "Google News", "https://news.google.com", "https://news.google.com/search?q=%s" },
+    { "Noticias", "Bing News", "https://www.bing.com/news", "https://www.bing.com/news/search?q=%s" },
+    { "Noticias", "Yahoo News", "https://news.yahoo.com", "https://news.search.yahoo.com/search?p=%s" },
+    { "Noticias", "Apple News", "https://www.apple.com/apple-news", NULL },
+    { "Noticias", "Yandex News", "https://dzen.ru/news", "https://dzen.ru/news/search?text=%s" },
+    { "Noticias", "Baidu News", "https://news.baidu.com", "https://news.baidu.com/ns?word=%s" },
+    { "Noticias", "Naver News", "https://news.naver.com", "https://search.naver.com/search.naver?where=news&query=%s" },
+    { "Noticias", "Feedly", "https://feedly.com", "https://feedly.com/i/search/%s" },
+    { "Noticias", "NewsNow", "https://www.newsnow.co.uk", "https://www.newsnow.co.uk/h/?search=%s" },
+    { "Noticias", "Ground News", "https://ground.news", "https://ground.news/search/%s" },
+    { "Noticias", "AllSides", "https://www.allsides.com", "https://www.allsides.com/search?search=%s" },
+
+    { "Compras e precos", "Google Shopping", "https://shopping.google.com", "https://www.google.com/search?tbm=shop&q=%s" },
+    { "Compras e precos", "Bing Shopping", "https://www.bing.com/shop", "https://www.bing.com/shop?q=%s" },
+    { "Compras e precos", "Yahoo Shopping", "https://shopping.yahoo.com", "https://shopping.yahoo.com/search?p=%s" },
+    { "Compras e precos", "Amazon", "https://www.amazon.com", "https://www.amazon.com/s?k=%s" },
+    { "Compras e precos", "eBay", "https://www.ebay.com", "https://www.ebay.com/sch/i.html?_nkw=%s" },
+    { "Compras e precos", "AliExpress", "https://www.aliexpress.com", "https://www.aliexpress.com/wholesale?SearchText=%s" },
+    { "Compras e precos", "PriceRunner", "https://www.pricerunner.com", "https://www.pricerunner.com/results?q=%s" },
+    { "Compras e precos", "Kelkoo", "https://www.kelkoo.com", "https://www.kelkoo.com/search?q=%s" },
+    { "Compras e precos", "Shopzilla", "https://www.shopzilla.com", "https://www.shopzilla.com/search?q=%s" },
+    { "Compras e precos", "Shopping.com", "https://www.shopping.com", "https://www.shopping.com/products?KW=%s" },
+    { "Compras e precos", "Idealo", "https://www.idealo.com", "https://www.idealo.com/compare.html?q=%s" },
+    { "Compras e precos", "Camelcamelcamel", "https://camelcamelcamel.com", "https://camelcamelcamel.com/search?sq=%s" },
+    { "Compras e precos", "Keepa", "https://keepa.com", "https://keepa.com/#!search/1-%s" },
+
+    { "Codigo e programacao", "GitHub Search", "https://github.com/search", "https://github.com/search?q=%s" },
+    { "Codigo e programacao", "GitLab Search", "https://gitlab.com/search", "https://gitlab.com/search?search=%s" },
+    { "Codigo e programacao", "Sourcegraph", "https://sourcegraph.com/search", "https://sourcegraph.com/search?q=%s" },
+    { "Codigo e programacao", "grep.app", "https://grep.app", "https://grep.app/search?q=%s" },
+    { "Codigo e programacao", "Searchcode", "https://searchcode.com", "https://searchcode.com/?q=%s" },
+    { "Codigo e programacao", "Stack Overflow Search", "https://stackoverflow.com/search", "https://stackoverflow.com/search?q=%s" },
+    { "Codigo e programacao", "Libraries.io", "https://libraries.io", "https://libraries.io/search?q=%s" },
+    { "Codigo e programacao", "npm", "https://www.npmjs.com", "https://www.npmjs.com/search?q=%s" },
+    { "Codigo e programacao", "PyPI", "https://pypi.org", "https://pypi.org/search/?q=%s" },
+    { "Codigo e programacao", "Maven Repository", "https://mvnrepository.com", "https://mvnrepository.com/search?q=%s" },
+    { "Codigo e programacao", "crates.io", "https://crates.io", "https://crates.io/search?q=%s" },
+    { "Codigo e programacao", "Docker Hub", "https://hub.docker.com/search", "https://hub.docker.com/search?q=%s" },
+
+    { "Livros, arquivos e documentos", "Google Books", "https://books.google.com", "https://www.google.com/search?tbm=bks&q=%s" },
+    { "Livros, arquivos e documentos", "Internet Archive", "https://archive.org", "https://archive.org/search?query=%s" },
+    { "Livros, arquivos e documentos", "Open Library", "https://openlibrary.org", "https://openlibrary.org/search?q=%s" },
+    { "Livros, arquivos e documentos", "WorldCat", "https://www.worldcat.org", "https://www.worldcat.org/search?q=%s" },
+    { "Livros, arquivos e documentos", "HathiTrust", "https://www.hathitrust.org", "https://www.hathitrust.org/search?searchtype=all&q1=%s" },
+    { "Livros, arquivos e documentos", "Project Gutenberg", "https://www.gutenberg.org", "https://www.gutenberg.org/ebooks/search/?query=%s" },
+    { "Livros, arquivos e documentos", "Scribd", "https://www.scribd.com", "https://www.scribd.com/search?query=%s" },
+    { "Livros, arquivos e documentos", "Issuu", "https://issuu.com", "https://issuu.com/search?q=%s" },
+
+    { "Especializados", "FindZebra", "https://www.findzebra.com", "https://www.findzebra.com/?q=%s" },
+    { "Especializados", "Shodan", "https://www.shodan.io", "https://www.shodan.io/search?query=%s" },
+    { "Especializados", "Censys", "https://search.censys.io", "https://search.censys.io/search?resource=hosts&q=%s" },
+    { "Especializados", "ZoomEye", "https://www.zoomeye.org", "https://www.zoomeye.org/searchResult?q=%s" },
+    { "Especializados", "Have I Been Pwned", "https://haveibeenpwned.com", NULL },
+    { "Especializados", "Wayback Machine", "https://web.archive.org", "https://web.archive.org/web/*/%s" },
+    { "Especializados", "Listen Notes", "https://www.listennotes.com", "https://www.listennotes.com/search/?q=%s" },
+    { "Especializados", "BoardReader", "https://boardreader.com", "https://boardreader.com/s/%s.html" },
+    { "Especializados", "Social Searcher", "https://www.social-searcher.com", "https://www.social-searcher.com/social-buzz/?q=%s" },
+    { "Especializados", "Crunchbase", "https://www.crunchbase.com", "https://www.crunchbase.com/search/all/results?query=%s" },
+    { "Especializados", "IMDb", "https://www.imdb.com", "https://www.imdb.com/find/?q=%s" },
+    { "Especializados", "MusicBrainz", "https://musicbrainz.org", "https://musicbrainz.org/search?query=%s&type=artist&method=indexed" },
+    { "Especializados", "Discogs", "https://www.discogs.com", "https://www.discogs.com/search/?q=%s&type=all" },
+
+    { "Antigos / encerrados", "Ask.com", "https://www.ask.com", NULL },
+    { "Antigos / encerrados", "Microsoft Academic", "https://en.wikipedia.org/wiki/Microsoft_Academic", NULL },
+    { "Antigos / encerrados", "Google Code Search", "https://en.wikipedia.org/wiki/Google_Code_Search", NULL },
+    { "Antigos / encerrados", "AltaVista", "https://en.wikipedia.org/wiki/AltaVista", NULL },
+    { "Antigos / encerrados", "HotBot", "https://en.wikipedia.org/wiki/HotBot", NULL },
+    { "Antigos / encerrados", "Infoseek", "https://en.wikipedia.org/wiki/Infoseek", NULL },
+    { "Antigos / encerrados", "AlltheWeb", "https://en.wikipedia.org/wiki/AlltheWeb", NULL },
+    { "Antigos / encerrados", "Inktomi", "https://en.wikipedia.org/wiki/Inktomi", NULL },
+    { "Antigos / encerrados", "Teoma", "https://en.wikipedia.org/wiki/Teoma", NULL },
+    { "Antigos / encerrados", "Cuil", "https://en.wikipedia.org/wiki/Cuil", NULL },
+    { "Antigos / encerrados", "Blekko", "https://en.wikipedia.org/wiki/Blekko", NULL },
+    { "Antigos / encerrados", "Gigablast", "https://en.wikipedia.org/wiki/Gigablast", NULL },
+    { "Antigos / encerrados", "ChaCha", "https://en.wikipedia.org/wiki/ChaCha_%28search_engine%29", NULL },
+    { "Antigos / encerrados", "Powerset", "https://en.wikipedia.org/wiki/Powerset_%28company%29", NULL },
+    { "Antigos / encerrados", "Neeva", "https://en.wikipedia.org/wiki/Neeva", NULL },
+    { "Antigos / encerrados", "Wikia Search", "https://en.wikipedia.org/wiki/Wikia_Search", NULL },
+    { "Antigos / encerrados", "Kartoo", "https://en.wikipedia.org/wiki/Kartoo", NULL },
+    { "Antigos / encerrados", "Ms. Dewey", "https://en.wikipedia.org/wiki/Ms._Dewey", NULL }
 };
+
+#define K_SEARCH_ENGINE_GOOGLE 0
+#define K_SEARCH_ENGINE_COUNT ((int)(sizeof(SEARCH_ENGINES) / sizeof(SEARCH_ENGINES[0])))
 
 static KColor theme_color(KApp *app, uint32_t argb) {
     float t = app ? app->theme_t : 0.0f;
@@ -481,6 +683,7 @@ static void sync_webview_visibility(KApp *app) {
 static void close_menu(KApp *app) {
     if (!app->menu_open) return;
     app->menu_open = 0;
+    app->search_picker_open = 0;
     sync_webview_visibility(app);
 }
 
@@ -576,53 +779,46 @@ static void make_search_url(const char *query, int page, char *out, size_t cap) 
     snprintf(out, cap, "kerosene:search?q=%s&page=%d", encoded, page);
 }
 
-static const char *search_engine_label(int engine) {
-    switch (engine) {
-    case K_SEARCH_ENGINE_BING: return "Bing";
-    case K_SEARCH_ENGINE_DUCKDUCKGO: return "DuckDuckGo";
-    case K_SEARCH_ENGINE_WIBY: return "Wiby";
-    case K_SEARCH_ENGINE_GOOGLE:
-    default:
-        return "Google principal";
+static const KSearchEngine *search_engine_def(int engine) {
+    if (engine < 0 || engine >= K_SEARCH_ENGINE_COUNT) {
+        return &SEARCH_ENGINES[K_SEARCH_ENGINE_GOOGLE];
     }
+    return &SEARCH_ENGINES[engine];
+}
+
+static const char *search_engine_label(int engine) {
+    return search_engine_def(engine)->label;
 }
 
 static const char *search_engine_name(int engine) {
-    switch (engine) {
-    case K_SEARCH_ENGINE_BING: return "Bing";
-    case K_SEARCH_ENGINE_DUCKDUCKGO: return "DuckDuckGo";
-    case K_SEARCH_ENGINE_WIBY: return "Wiby";
-    case K_SEARCH_ENGINE_GOOGLE:
-    default:
-        return "Google";
+    return search_engine_def(engine)->label;
+}
+
+static void search_engine_template_url(const char *templ, const char *encoded_query, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    size_t j = 0;
+    for (size_t i = 0; templ && templ[i] && j + 1 < cap; i++) {
+        if (templ[i] == '%' && templ[i + 1] == 's') {
+            const char *q = encoded_query ? encoded_query : "";
+            for (size_t k = 0; q[k] && j + 1 < cap; k++) {
+                out[j++] = q[k];
+            }
+            i++;
+        } else {
+            out[j++] = templ[i];
+        }
     }
+    out[j] = 0;
 }
 
 static void make_search_engine_url(int engine, const char *query, char *out, size_t cap) {
     char encoded[512];
+    const KSearchEngine *def = search_engine_def(engine);
     url_encode_query(query, encoded, sizeof(encoded));
-    if (!query || !*query) {
-        if (engine == K_SEARCH_ENGINE_BING) snprintf(out, cap, "https://www.bing.com/");
-        else if (engine == K_SEARCH_ENGINE_DUCKDUCKGO) snprintf(out, cap, "https://duckduckgo.com/");
-        else if (engine == K_SEARCH_ENGINE_WIBY) snprintf(out, cap, "https://wiby.me/");
-        else snprintf(out, cap, "https://www.google.com/");
-        return;
-    }
-
-    switch (engine) {
-    case K_SEARCH_ENGINE_BING:
-        snprintf(out, cap, "https://www.bing.com/search?q=%s", encoded);
-        break;
-    case K_SEARCH_ENGINE_DUCKDUCKGO:
-        snprintf(out, cap, "https://duckduckgo.com/?q=%s", encoded);
-        break;
-    case K_SEARCH_ENGINE_WIBY:
-        snprintf(out, cap, "https://wiby.me/?q=%s", encoded);
-        break;
-    case K_SEARCH_ENGINE_GOOGLE:
-    default:
-        snprintf(out, cap, "https://www.google.com/search?q=%s", encoded);
-        break;
+    if (query && *query && def->query_url) {
+        search_engine_template_url(def->query_url, encoded, out, cap);
+    } else {
+        snprintf(out, cap, "%s", def->home_url);
     }
 }
 
@@ -927,9 +1123,9 @@ static void app_toggle_site_engine(KApp *app) {
     }
 }
 
-static void app_cycle_search_engine(KApp *app) {
-    if (!app) return;
-    app->search_engine = (app->search_engine + 1) % K_SEARCH_ENGINE_COUNT;
+static void app_select_search_engine(KApp *app, int engine) {
+    if (!app || engine < 0 || engine >= K_SEARCH_ENGINE_COUNT) return;
+    app->search_engine = engine;
     InvalidateRect(app->hwnd, NULL, FALSE);
 }
 
@@ -1156,6 +1352,97 @@ static KRect settings_external_row(KApp *app) {
     return settings_row(app, 6);
 }
 
+#define K_SEARCH_PICKER_PAD 8.0f
+#define K_SEARCH_PICKER_HEADER_H 24.0f
+#define K_SEARCH_PICKER_ITEM_H 34.0f
+
+static KRect settings_search_picker_rect(KApp *app) {
+    KRect p = settings_panel_rect(app);
+    KRect row = settings_search_row(app);
+    float y = row.y + row.h + 6.0f;
+    float h = p.y + p.h - y - 16.0f;
+    if (h > 420.0f) h = 420.0f;
+    if (h < 160.0f) {
+        y = p.y + 52.0f;
+        h = p.y + p.h - y - 14.0f;
+    }
+    if (h < 90.0f) h = 90.0f;
+    return (KRect){ row.x, y, row.w, h };
+}
+
+static float search_picker_content_height(void) {
+    float h = K_SEARCH_PICKER_PAD;
+    const char *category = NULL;
+    for (int i = 0; i < K_SEARCH_ENGINE_COUNT; i++) {
+        const KSearchEngine *def = &SEARCH_ENGINES[i];
+        if (!category || strcmp(category, def->category) != 0) {
+            h += K_SEARCH_PICKER_HEADER_H;
+            category = def->category;
+        }
+        h += K_SEARCH_PICKER_ITEM_H;
+    }
+    return h + K_SEARCH_PICKER_PAD;
+}
+
+static void search_picker_clamp_scroll(KApp *app) {
+    if (!app) return;
+    KRect r = settings_search_picker_rect(app);
+    float max_scroll = search_picker_content_height() - r.h;
+    if (max_scroll < 0.0f) max_scroll = 0.0f;
+    if (app->search_picker_scroll < 0.0f) app->search_picker_scroll = 0.0f;
+    if (app->search_picker_scroll > max_scroll) app->search_picker_scroll = max_scroll;
+}
+
+static void search_picker_ensure_selected_visible(KApp *app) {
+    if (!app) return;
+    KRect r = settings_search_picker_rect(app);
+    float y = K_SEARCH_PICKER_PAD;
+    const char *category = NULL;
+    for (int i = 0; i < K_SEARCH_ENGINE_COUNT; i++) {
+        const KSearchEngine *def = &SEARCH_ENGINES[i];
+        if (!category || strcmp(category, def->category) != 0) {
+            y += K_SEARCH_PICKER_HEADER_H;
+            category = def->category;
+        }
+        if (i == app->search_engine) {
+            float item_top = y;
+            float item_bottom = y + K_SEARCH_PICKER_ITEM_H;
+            float visible_top = app->search_picker_scroll + K_SEARCH_PICKER_PAD;
+            float visible_bottom = app->search_picker_scroll + r.h - K_SEARCH_PICKER_PAD;
+            if (item_top < visible_top) {
+                app->search_picker_scroll = item_top - K_SEARCH_PICKER_PAD;
+            } else if (item_bottom > visible_bottom) {
+                app->search_picker_scroll = item_bottom - r.h + K_SEARCH_PICKER_PAD;
+            }
+            search_picker_clamp_scroll(app);
+            return;
+        }
+        y += K_SEARCH_PICKER_ITEM_H;
+    }
+}
+
+static int search_picker_item_at(KApp *app, float x, float y) {
+    if (!app || !app->search_picker_open) return -1;
+    KRect r = settings_search_picker_rect(app);
+    if (!point_in(r, x, y)) return -1;
+
+    float local_y = y - r.y + app->search_picker_scroll;
+    float cursor = K_SEARCH_PICKER_PAD;
+    const char *category = NULL;
+    for (int i = 0; i < K_SEARCH_ENGINE_COUNT; i++) {
+        const KSearchEngine *def = &SEARCH_ENGINES[i];
+        if (!category || strcmp(category, def->category) != 0) {
+            cursor += K_SEARCH_PICKER_HEADER_H;
+            category = def->category;
+        }
+        if (local_y >= cursor && local_y < cursor + K_SEARCH_PICKER_ITEM_H) {
+            return i;
+        }
+        cursor += K_SEARCH_PICKER_ITEM_H;
+    }
+    return -1;
+}
+
 static void draw_settings_switch(KApp *app, KRect row, int on, int enabled) {
     KRect r = { row.x + row.w - 58.0f, row.y + 7.0f, 48.0f, 28.0f };
     KColor track = enabled
@@ -1179,6 +1466,62 @@ static void draw_settings_row(KApp *app, KRect row, const char *label, const cha
     }
 }
 
+static void draw_search_picker(KApp *app) {
+    if (!app->search_picker_open) return;
+    search_picker_clamp_scroll(app);
+
+    KRect r = settings_search_picker_rect(app);
+    KColor surface = theme_pair(app, 0xFFFFFFFF, 0xFF101114);
+    KColor border = theme_pair(app, 0xFFD0D5DD, 0xFF3A3D45);
+    KColor text = theme_color(app, app->theme.text);
+    KColor muted = theme_color(app, app->theme.muted);
+    KColor category = theme_pair(app, 0xFF3C4043, 0xFFC6CAD1);
+    KColor selected_bg = theme_pair(app, 0xFFE8F0FE, 0xFF1C2B3A);
+    KColor item_bg = theme_pair(app, 0x00FFFFFF, 0x00101114);
+    KColor accent = theme_color(app, app->theme.accent);
+
+    renderer_fill_rect(app->renderer, (KRect){r.x - 3.0f, r.y + 4.0f, r.w + 6.0f, r.h + 4.0f}, theme_pair(app, 0x22000000, 0xAA000000), 10.0f);
+    renderer_fill_rect(app->renderer, r, surface, 10.0f);
+    renderer_draw_border(app->renderer, r, border, 1.0f, 10.0f);
+
+    float y = r.y + K_SEARCH_PICKER_PAD - app->search_picker_scroll;
+    float visible_top = r.y + K_SEARCH_PICKER_PAD;
+    float visible_bottom = r.y + r.h - K_SEARCH_PICKER_PAD;
+    const char *last_category = NULL;
+    for (int i = 0; i < K_SEARCH_ENGINE_COUNT; i++) {
+        const KSearchEngine *def = &SEARCH_ENGINES[i];
+        if (!last_category || strcmp(last_category, def->category) != 0) {
+            KRect category_rect = { r.x + 12.0f, y + 5.0f, r.w - 24.0f, 16.0f };
+            if (category_rect.y >= visible_top && category_rect.y + category_rect.h <= visible_bottom) {
+                renderer_draw_text(app->renderer, category_rect, category, def->category, 11.0f, 700, 0);
+            }
+            y += K_SEARCH_PICKER_HEADER_H;
+            last_category = def->category;
+        }
+
+        KRect item = { r.x + 8.0f, y, r.w - 16.0f, K_SEARCH_PICKER_ITEM_H - 2.0f };
+        if (item.y >= visible_top && item.y + item.h <= visible_bottom) {
+            int selected = i == app->search_engine;
+            renderer_fill_rect(app->renderer, item, selected ? selected_bg : item_bg, 7.0f);
+            if (selected) {
+                renderer_fill_rect(app->renderer, (KRect){item.x + 6.0f, item.y + 8.0f, 3.0f, item.h - 16.0f}, accent, 2.0f);
+            }
+            renderer_draw_text(app->renderer, (KRect){item.x + 15.0f, item.y + 4.0f, item.w - 24.0f, 15.0f}, text, def->label, 12.0f, selected ? 700 : 500, 0);
+            renderer_draw_text(app->renderer, (KRect){item.x + 15.0f, item.y + 18.0f, item.w - 24.0f, 12.0f}, muted, def->query_url ? def->home_url : "Sem URL direta de consulta", 10.0f, 400, 0);
+        }
+        y += K_SEARCH_PICKER_ITEM_H;
+    }
+
+    float content_h = search_picker_content_height();
+    if (content_h > r.h + 1.0f) {
+        float track_h = r.h - 18.0f;
+        float thumb_h = fmaxf(28.0f, track_h * (r.h / content_h));
+        float max_scroll = content_h - r.h;
+        float thumb_y = r.y + 9.0f + (track_h - thumb_h) * (max_scroll > 0.0f ? app->search_picker_scroll / max_scroll : 0.0f);
+        renderer_fill_rect(app->renderer, (KRect){r.x + r.w - 6.0f, thumb_y, 3.0f, thumb_h}, theme_pair(app, 0x553C4043, 0x88C6CAD1), 2.0f);
+    }
+}
+
 static void draw_settings_panel(KApp *app) {
     if (!app->menu_open) return;
     KRect p = settings_panel_rect(app);
@@ -1196,6 +1539,7 @@ static void draw_settings_panel(KApp *app) {
 
     KRect search_row = settings_search_row(app);
     draw_settings_row(app, search_row, "Busca padrao", search_engine_label(app->search_engine), 1);
+    renderer_draw_text(app->renderer, (KRect){search_row.x + search_row.w - 34.0f, search_row.y + 11.0f, 18.0f, 18.0f}, muted, app->search_picker_open ? "^" : "v", 14.0f, 700, 0);
 
     KRect engine_row = settings_engine_row(app);
     draw_settings_row(app, engine_row, "Motor de sites", app->prefer_webview ? "WebView2 compatibilidade" : "Renderizador nativo", 1);
@@ -1217,6 +1561,7 @@ static void draw_settings_panel(KApp *app) {
     renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 64.0f, p.w - 36.0f, 18.0f}, muted, search_footer, 12.0f, 400, 0);
     renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 42.0f, p.w - 36.0f, 18.0f}, muted, "Abas: estado preservado", 12.0f, 400, 0);
     renderer_draw_text(app->renderer, (KRect){p.x + 18.0f, p.y + p.h - 20.0f, p.w - 36.0f, 18.0f}, muted, "Kerosene 0.1", 12.0f, 400, 0);
+    draw_search_picker(app);
 }
 
 static void draw_window_controls(KApp *app) {
@@ -1676,13 +2021,33 @@ static void handle_click(KApp *app, int x, int y) {
             InvalidateRect(app->hwnd, NULL, FALSE);
             return;
         }
+        if (app->search_picker_open) {
+            if (point_in(settings_search_row(app), (float)x, (float)y)) {
+                app->search_picker_open = 0;
+                InvalidateRect(app->hwnd, NULL, FALSE);
+                return;
+            }
+            int picked = search_picker_item_at(app, (float)x, (float)y);
+            if (picked >= 0) {
+                app_select_search_engine(app, picked);
+                app->search_picker_open = 0;
+                return;
+            }
+            if (point_in(settings_search_picker_rect(app), (float)x, (float)y)) {
+                return;
+            }
+            app->search_picker_open = 0;
+            InvalidateRect(app->hwnd, NULL, FALSE);
+        }
         if (point_in(settings_theme_row(app), (float)x, (float)y)) {
             theme_start_toggle(app);
             InvalidateRect(app->hwnd, NULL, FALSE);
             return;
         }
         if (point_in(settings_search_row(app), (float)x, (float)y)) {
-            app_cycle_search_engine(app);
+            app->search_picker_open = 1;
+            search_picker_ensure_selected_visible(app);
+            InvalidateRect(app->hwnd, NULL, FALSE);
             return;
         }
         if (point_in(settings_engine_row(app), (float)x, (float)y)) {
@@ -1782,6 +2147,7 @@ static void handle_click(KApp *app, int x, int y) {
         if (point_in(menu_button_rect(app), (float)x, (float)y)) {
             clear_text_focus(app);
             app->menu_open = 1;
+            app->search_picker_open = 0;
             sync_webview_visibility(app);
             InvalidateRect(app->hwnd, NULL, FALSE);
             return;
@@ -1971,6 +2337,16 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wp);
+        if (app->menu_open && app->search_picker_open) {
+            POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            ScreenToClient(hwnd, &pt);
+            if (point_in(settings_panel_rect(app), (float)pt.x, (float)pt.y)) {
+                app->search_picker_scroll -= (float)delta * 0.55f;
+                search_picker_clamp_scroll(app);
+                InvalidateRect(hwnd, NULL, FALSE);
+                return 0;
+            }
+        }
         set_current_scroll(app, current_scroll(app) - (float)delta * 0.55f);
         clamp_scroll(app);
         InvalidateRect(hwnd, NULL, FALSE);

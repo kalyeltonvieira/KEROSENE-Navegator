@@ -222,6 +222,7 @@ bool cache_get(const char *url, KHttpResponse *out);
 void cache_put(const char *url, const KHttpResponse *response);
 
 typedef struct KRenderer KRenderer;
+typedef struct KImage KImage;
 bool renderer_init(HWND hwnd, KRenderer **out, char *err, size_t err_cap);
 void renderer_resize(KRenderer *renderer, int width, int height);
 void renderer_begin(KRenderer *renderer, KColor clear);
@@ -229,6 +230,9 @@ void renderer_fill_rect(KRenderer *renderer, KRect rect, KColor color, float rad
 void renderer_draw_border(KRenderer *renderer, KRect rect, KColor color, float width, float radius);
 void renderer_draw_line(KRenderer *renderer, float x0, float y0, float x1, float y1, KColor color, float width);
 void renderer_draw_text(KRenderer *renderer, KRect rect, KColor color, const char *text, float font_size, int font_weight, int underline);
+KImage *renderer_image_from_memory(KRenderer *renderer, const void *data, size_t len);
+void renderer_draw_image(KRenderer *renderer, KImage *image, KRect rect, float opacity);
+void renderer_image_free(KImage *image);
 float renderer_measure_text_width(KRenderer *renderer, const char *text, float font_size, int font_weight);
 void renderer_end(KRenderer *renderer);
 void renderer_free(KRenderer *renderer);
